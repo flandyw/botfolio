@@ -1,0 +1,56 @@
+# Ubuntu VPS deployment:  docker compose up -d --build
+# Credentials come from .env (never baked into the image).
+services:
+  bot:
+    build: .
+    image: ttbot:latest
+    container_name: ttbot-bot
+    command: ["ttbot", "forward"]
+    env_file: .env
+    environment:
+      TTBOT_DB_PATH: /app/data/ttbot.sqlite
+      TTBOT_LOG_JSON: "true"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped          # automatic crash recovery (state is restored from SQLite)
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "ttbot", "health", "--max-age", "900"]
+      interval: 5m
+      timeout: 30s
+      start_period: 5m
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+  dashboard:
+    image: ttbot:latest
+    depends_on: [bot]
+    container_name: ttbot-dashboard
+    command: ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0",
+              "--server.headless=true", "--browser.gatherUsageStats=false"]
+    environment:
+      TTBOT_DB_PATH: /app/data/ttbot.sqlite
+    volumes:
+      - ./data:/app/data
+    # Bound to localhost: reach it through an SSH tunnel (ssh -L 8501:localhost:8501 user@vps)
+    # or put an authenticating reverse proxy in front. Do not expose it publicly as-is.
+    ports:
+      - "127.0.0.1:8501:8501"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  # One-off jobs, e.g.:
+  #   docker compose run --rm backtest ttbot backtest --start 2025-01-02 --end 2025-12-31
+  backtest:
+    image: ttbot:latest
+    profiles: ["tools"]
+    env_file: .env
+    environment:
+      TTBOT_DB_PATH: /app/data/ttbot.sqlite
+    volumes:
+      - ./data:/app/data
+    command: ["ttbot", "report"]

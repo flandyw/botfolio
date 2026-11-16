@@ -1,0 +1,57 @@
+# Sensitivity scenario: optimistic costs (half-spread + fees only, tiny stop slippage).
+symbols: [QQQ, SPY]          # NASDAQ-100 and S&P 500 proxies
+timeframes: [1, 5]           # minutes; every strategy runs on each listed timeframe
+seed: 42                     # drives the random baseline + Monte-Carlo test (reproducible)
+include_inverse: true        # add an inverse-signal twin for every pattern strategy
+random_baseline_trades_per_day: 2.0
+monte_carlo_iterations: 2000
+
+data:
+  feed: iex                  # iex (free real-time) | sip (free historical only, >15 min old)
+  adjustment: all
+  cache_bars: true
+
+session:
+  calendar: XNYS             # NYSE: regular hours 09:30-16:00 ET, holidays and early closes
+
+costs:
+  half_spread_per_share: 0.005   # QQQ/SPY usually quote a 1-cent spread
+  slippage_bps: 0.0
+  stop_slippage_bps: 0.5
+  commission_per_share: 0.0      # Alpaca is commission-free for US equities
+  min_commission: 0.0
+  sec_fee_per_million: 27.80     # SEC Section 31 (sells). Conservative; the rate is revised yearly
+  finra_taf_per_share: 0.000166  # FINRA TAF (sells), capped
+  finra_taf_max: 8.30
+
+risk:                         # identical for every portfolio
+  starting_capital: 100000
+  risk_per_trade_pct: 0.5     # equity lost if the stop is hit
+  max_position_pct: 100       # no leverage
+  max_gross_exposure_pct: 100
+  max_open_positions: 2
+  max_trades_per_day: 10
+  daily_loss_limit_pct: 2.0
+  allow_short: true
+
+exits:                        # identical for every pattern strategy
+  stop_mode: structure        # structure: pattern's invalidation level (clamped) | atr
+  atr_period: 14
+  atr_stop_mult: 1.5          # used when stop_mode=atr or the pattern has no structural stop
+  min_stop_atr: 0.5
+  max_stop_atr: 3.0
+  reward_risk: 2.0            # take profit at 2R
+  max_hold_bars: 60           # time stop (bars of the strategy's timeframe)
+  flatten_eod: true
+  no_entry_last_minutes: 15
+
+strategies:
+  - {name: fvg,       kind: fvg,             params: {min_gap_atr: 0.25, min_body_atr: 0.5, expire_bars: 30}}
+  - {name: sweep,     kind: liquidity_sweep, params: {left: 5, right: 5, max_age: 120}}
+  - {name: ob,        kind: order_block,     params: {left: 3, right: 3, lookback: 10, expire_bars: 60}}
+  - {name: bos,       kind: structure,       params: {left: 3, right: 3, break_type: BOS}}
+  - {name: choch,     kind: structure,       params: {left: 3, right: 3, break_type: CHoCH}}
+  - {name: ema_9_21,  kind: ema_cross,       params: {fast: 9, slow: 21}}
+  - {name: rsi_div,   kind: rsi_divergence,  params: {rsi_period: 14, left: 3, right: 3, oversold: 40, overbought: 60}}
+  - {name: orb15,     kind: orb,             timeframes: [1, 5], params: {or_minutes: 15, stop: opposite}}
+  - {name: random,    kind: random}
