@@ -63,6 +63,7 @@ def run_backtest(
     stats = compute_stats(
         cfg, storage.trades(run_id), storage.equity(run_id), list(engine.portfolios), bars if monte_carlo else None,
         exits={n: p.exits for n, p in engine.portfolios.items()},
+        symbols={s.name: s.symbols for s in engine.strategies},
     )
     for name, rej in rejections.items():
         stats[name]["rejections"] = rej

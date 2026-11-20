@@ -140,7 +140,7 @@ uv run ttbot simulate --day 2026-11-13                     # local simulated exe
 uv run ttbot forward                                       # forward paper trading, runs forever
 uv run ttbot dashboard                                     # http://localhost:8501
 uv run ttbot report [--run-id ID]                          # list runs / print a ranking
-uv run pytest                                              # 48 unit + integration tests
+uv run pytest                                              # 51 unit + integration tests
 uv run ruff check src tests && uv run mypy src             # lint + type check
 ```
 
@@ -311,7 +311,7 @@ src/ttbot/
   engine.py backtest.py live.py simulate.py
   metrics.py montecarlo.py analysis.py
 dashboard/app.py   Streamlit UI
-tests/             48 tests: indicators, patterns, aggregation, no-look-ahead, portfolio, Monte Carlo,
+tests/             51 tests: indicators, patterns, aggregation, no-look-ahead, portfolio, Monte Carlo,
                    safety, persistence, crash recovery, backtest/live equivalence
 ```
 

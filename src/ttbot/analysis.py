@@ -45,6 +45,7 @@ def compute_stats(
     portfolios: list[str],
     bars: list[Bar] | None = None,
     exits: dict[str, ExitConfig] | None = None,
+    symbols: dict[str, list[str] | None] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Metrics for every portfolio; adds the random-entry Monte-Carlo test when ``bars`` are given.
 
@@ -72,7 +73,7 @@ def compute_stats(
             m.update(
                 null.test(
                     m["avg_return_pct"], len(t), m["long_frac"], m["timeframe"], stop_atr, rr_eff,
-                    cfg.monte_carlo_iterations, cfg.seed,
+                    cfg.monte_carlo_iterations, cfg.seed, ex, (symbols or {}).get(name),
                 )
             )
         out[name] = m
