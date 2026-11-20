@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
@@ -132,3 +133,52 @@ def test_regulatory_fees_on_sells_only():
     cm = CostModel(CostConfig())
     assert cm.fees(100, 500.0, 1) == 0.0
     assert cm.fees(100, 500.0, -1) == pytest.approx(100 * 500 * 27.80 / 1e6 + 100 * 0.000166)
+
+
+def _flex_pf(**risk_kw):
+    ex = ExitConfig(stop_mode="none", max_hold_bars=390, no_entry_last_minutes=0)
+    risk = RiskConfig(starting_capital=100_000, sizing="notional", max_position_pct=100, **risk_kw)
+    return Portfolio("t", 1, risk, ex, CostModel(ZERO_COSTS))
+
+
+def test_notional_sizing_no_stop_and_exit_signal(cal):
+    bars = make_bars(cal, [(100, 100, 100, 100), (100, 100, 100, 100), (50, 200, 1, 101), (102, 102, 102, 102)])
+    pf = _flex_pf()
+    pf.on_bar(bars[0])
+    pf.submit(_sig(bars[0], 1), bars[0])
+    pf.on_bar(bars[1])
+    pos = pf.positions["SPY"]
+    assert pos.qty == 1000 and pos.stop is None and pos.target is None
+    pf.on_bar(bars[2])  # huge range: no stop/target to hit
+    assert "SPY" in pf.positions
+    pf.submit(replace(_sig(bars[2], 1), exit=True), bars[2])
+    pf.on_bar(bars[3])
+    t = pf.closed[0]
+    assert t.exit_reason == "signal" and t.exit_price == 102 and t.net_pnl == pytest.approx(2000)
+
+
+def test_reverse_signal_flips_position_at_next_open(cal):
+    bars = make_bars(cal, [(100, 100, 100, 100), (100, 100, 100, 100), (99, 99, 99, 99), (99.5, 99.5, 99.5, 99.5)])
+    pf = _flex_pf()
+    pf.on_bar(bars[0])
+    pf.submit(_sig(bars[0], 1), bars[0])
+    pf.on_bar(bars[1])
+    pf.submit(_sig(bars[1], 1), bars[1])  # same side while in position -> ignored
+    assert pf.rejections == {"already_in_position": 1}
+    pf.submit(replace(_sig(bars[2], -1), reverse=True), bars[2])
+    pf.on_bar(bars[3])
+    assert pf.closed[0].exit_reason == "reverse" and pf.closed[0].exit_price == 99.5
+    assert pf.positions["SPY"].side == -1 and pf.positions["SPY"].entry_fill == 99.5
+
+
+def test_non_reverse_opposite_signal_is_still_ignored(cal):
+    bars = make_bars(cal, [(100, 100, 100, 100), (100, 100, 100, 100), (99, 99, 99, 99)])
+    pf = _flex_pf()
+    pf.on_bar(bars[0])
+    pf.submit(_sig(bars[0], 1), bars[0])
+    pf.on_bar(bars[1])
+    pf.submit(_sig(bars[1], -1), bars[1])
+    pf.submit(replace(_sig(bars[1], -1), exit=True), bars[1])
+    pf.on_bar(bars[2])
+    assert pf.closed[0].exit_reason == "signal"
+    assert not pf.positions and pf.rejections == {"already_in_position": 1}

@@ -9,6 +9,8 @@ Execution rules (identical in backtest and forward paper trading):
   - Targets are limit orders: they fill only if price trades strictly through the level.
   - Time stop after ``max_hold_bars`` x timeframe minutes, filled at that bar's close.
   - Intraday positions are flattened at the close of the session's last bar.
+  - Strategy exit signals (``Signal.exit``) close at the next bar's open; ``Signal.reverse`` entries close
+    an opposite-side position at that open and then enter.
 """
 
 from __future__ import annotations
@@ -121,7 +123,15 @@ class Portfolio:
     # -------------------------------------------------------------- signals
     def submit(self, sig: Signal, bar: Bar) -> None:
         """Queue a signal (known at the close of ``bar``) for execution at the next bar's open."""
-        if sig.symbol in self.positions or sig.symbol in self.pending:
+        pos = self.positions.get(sig.symbol)
+        if sig.exit:
+            if pos is None or pos.hold or sig.symbol in self.pending:
+                self._reject("exit_without_position")
+            else:
+                self.pending[sig.symbol] = _Pending(sig)
+            return
+        reversing = sig.reverse and pos is not None and not pos.hold and pos.side != sig.side
+        if (pos is not None and not reversing) or sig.symbol in self.pending:
             self._reject("already_in_position")
             return
         if not sig.hold:
@@ -165,22 +175,26 @@ class Portfolio:
         if equity <= self.day_start_equity * (1 - self.risk.daily_loss_limit_pct / 100.0):
             self._reject("daily_loss_limit")
             return
-        stop_dist = self._stop_distance(sig)
+        no_stop = self.exits.stop_mode == "none"
+        stop_dist = 0.0 if no_stop else self._stop_distance(sig)
         if sig.inverse:
             stop_dist, target_dist = self.exits.reward_risk * stop_dist, stop_dist
         else:
             target_dist = self.exits.reward_risk * stop_dist
         fill = self.costs.fill_price(ref, sig.side, "market")
-        qty_risk = equity * self.risk.risk_per_trade_pct / 100.0 / stop_dist
         qty_pos = equity * self.risk.max_position_pct / 100.0 / fill
+        if self.risk.sizing == "risk" and stop_dist > 0:
+            qty_risk = equity * self.risk.risk_per_trade_pct / 100.0 / stop_dist
+        else:
+            qty_risk = qty_pos
         room = equity * self.risk.max_gross_exposure_pct / 100.0 - self.gross_exposure()
         qty = math.floor(min(qty_risk, qty_pos, max(room, 0.0) / fill))
         if qty < 1:
             self._reject("size_below_one_share")
             return
         fees = self.costs.fees(qty, fill, sig.side)
-        stop = fill - sig.side * stop_dist
-        target = fill + sig.side * target_dist
+        stop = None if no_stop else fill - sig.side * stop_dist
+        target = None if no_stop else fill + sig.side * target_dist
         deadline = bar.ts + timedelta(minutes=self.exits.max_hold_bars * self.timeframe)
         self._book_entry(sig, bar, qty, ref, fill, fees, stop, target, stop_dist, deadline)
 
@@ -252,14 +266,24 @@ class Portfolio:
             sig = pend.signal
             if sig.ts <= bar.ts and (sig.hold or bar.session == sig.session):
                 self.last_price[sym] = bar.open
-                self._open(sig, bar)
+                cur = self.positions.get(sym)
+                if sig.exit:
+                    if cur is not None:
+                        self._close(cur, bar.ts, bar.open, "market", "signal")
+                else:
+                    if cur is not None and sig.reverse and cur.side != sig.side:
+                        self._close(cur, bar.ts, bar.open, "market", "reverse")
+                    self._open(sig, bar)
             else:
                 self._reject("stale_signal")
         self.last_price[sym] = bar.close
         pos = self.positions.get(sym)
         if pos is None or pos.hold:
             return
-        assert pos.stop is not None and pos.target is not None
+        if pos.stop is None or pos.target is None:
+            if pos.deadline is not None and bar.end >= pos.deadline:
+                self._close(pos, bar.end, bar.close, "market", "time")
+            return
         s = pos.side
         # 1) gap through stop / target at the open
         if (s > 0 and bar.open <= pos.stop) or (s < 0 and bar.open >= pos.stop):

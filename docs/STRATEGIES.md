@@ -37,6 +37,23 @@ The tracker keeps the latest confirmed, unbroken swing high and swing low.
 
 FVG and order-block zones are cleared at each new session, so overnight gaps never count as imbalances.
 
+## Intraday momentum (noise area)
+
+`noise_area` (`strategies/momentum.py`) implements Zarattini, Aziz & Barbon (2024) on 1-minute bars. It is not a
+TikTok pattern; it is included as a contrast.
+
+* σ(m) = the mean, over the previous 14 sessions, of |close(m) / session open − 1| at minute-of-session *m*.
+* Upper band = max(open, previous close) × (1 + σ(m)); lower band = min(open, previous close) × (1 − σ(m)).
+* At the close of each bar that ends on a 30-minute boundary (10:00, 10:30, …, 15:30), the desired position is
+  long if close > upper band, short if close < lower band, and flat otherwise. A signal is emitted only when this
+  changes. Entries are `reverse` signals, so they flip an opposite position at the next open. A move back inside
+  the band is an `exit` signal, which closes at the next open.
+* `use_vwap: true` uses max(upper, VWAP) / min(lower, VWAP), as in the paper. It is off by default because forward
+  trading uses IEX volume.
+* The strategy has its own exit and risk overrides in the YAML: `stop_mode: none` (no stop or target),
+  `max_hold_bars: 390`, flat at the close, `sizing: notional` at 100% of equity, and ≤ 20 trades/day. It needs
+  15 prior sessions, which the forward runner replays at start-up.
+
 ## Exits and risk (identical for every pattern)
 
 * Stop distance = |signal close − structural stop|, clamped to [0.5, 3] × ATR, or 1.5 × ATR if the pattern

@@ -54,4 +54,19 @@ strategies:
   - {name: ema_9_21,  kind: ema_cross,       params: {fast: 9, slow: 21}}
   - {name: rsi_div,   kind: rsi_divergence,  params: {rsi_period: 14, left: 3, right: 3, oversold: 40, overbought: 60}}
   - {name: orb15,     kind: orb,             timeframes: [1, 5], params: {or_minutes: 15, stop: opposite}}
+  # Intraday momentum ("noise area" breakout, Zarattini/Aziz/Barbon 2024): own exits + full-notional sizing
+  - name: noise_qqq
+    kind: noise_area
+    timeframes: [1]
+    symbols: [QQQ]
+    params: {lookback: 14, step: 30, use_vwap: false}
+    exits: {stop_mode: none, max_hold_bars: 390}
+    risk: {sizing: notional, max_position_pct: 100, max_trades_per_day: 20}
+  - name: noise_spy
+    kind: noise_area
+    timeframes: [1]
+    symbols: [SPY]
+    params: {lookback: 14, step: 30, use_vwap: false}
+    exits: {stop_mode: none, max_hold_bars: 390}
+    risk: {sizing: notional, max_position_pct: 100, max_trades_per_day: 20}
   - {name: random,    kind: random}

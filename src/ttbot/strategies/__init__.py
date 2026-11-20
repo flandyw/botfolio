@@ -8,6 +8,7 @@ from ttbot.config import AppConfig
 from ttbot.strategies.base import Signal, Strategy
 from ttbot.strategies.baselines import BuyAndHoldStrategy, InverseStrategy, RandomStrategy
 from ttbot.strategies.classic import EMACrossStrategy, OpeningRangeBreakoutStrategy, RSIDivergenceStrategy
+from ttbot.strategies.momentum import NoiseAreaMomentumStrategy
 from ttbot.strategies.smc import (
     FVGStrategy,
     LiquiditySweepStrategy,
@@ -25,6 +26,7 @@ REGISTRY: dict[str, type[Strategy[Any]]] = {
         EMACrossStrategy,
         RSIDivergenceStrategy,
         OpeningRangeBreakoutStrategy,
+        NoiseAreaMomentumStrategy,
         RandomStrategy,
     )
 }
@@ -48,10 +50,14 @@ def build_roster(cfg: AppConfig) -> list[Strategy[Any]]:
             if spec.kind == "random":
                 params.setdefault("seed", cfg.seed)
                 params.setdefault("trades_per_day", cfg.random_baseline_trades_per_day)
-            strat = REGISTRY[spec.kind](f"{spec.name}_{tf}m", tf, params, None, atr_p)
+            exits = cfg.exits.model_copy(update=spec.exits) if spec.exits else None
+            risk = cfg.risk.model_copy(update=spec.risk) if spec.risk else None
+            strat = REGISTRY[spec.kind](f"{spec.name}_{tf}m", tf, params, spec.symbols, atr_p)
+            strat.exits, strat.risk = exits, risk
             roster.append(strat)
             if cfg.include_inverse and spec.kind != "random":
-                inner = REGISTRY[spec.kind](f"{spec.name}_{tf}m", tf, params, None, atr_p)
+                inner = REGISTRY[spec.kind](f"{spec.name}_{tf}m", tf, params, spec.symbols, atr_p)
+                inner.exits, inner.risk = exits, risk
                 roster.append(InverseStrategy(inner))
     if not any(s.kind == "random" for s in roster):
         for tf in cfg.timeframes:

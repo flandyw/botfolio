@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ttbot.config import AppConfig
+from ttbot.config import AppConfig, ExitConfig
 from ttbot.data.models import Bar
 from ttbot.metrics import benjamini_hochberg, portfolio_metrics, significance
 from ttbot.montecarlo import RandomEntryNull
@@ -44,8 +44,12 @@ def compute_stats(
     equity: pd.DataFrame,
     portfolios: list[str],
     bars: list[Bar] | None = None,
+    exits: dict[str, ExitConfig] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Metrics for every portfolio; adds the random-entry Monte-Carlo test when ``bars`` are given."""
+    """Metrics for every portfolio; adds the random-entry Monte-Carlo test when ``bars`` are given.
+
+    The Monte-Carlo null models fixed stop/target exits, so it is skipped for portfolios whose exits are
+    strategy-driven (``stop_mode: none``); their verdict then rests on the t-test alone."""
     null = RandomEntryNull(bars, cfg) if bars else None
     out: dict[str, dict[str, Any]] = {}
     for name in portfolios:
@@ -59,10 +63,11 @@ def compute_stats(
             out[name] = m
             continue
         m.update(significance(t["return_pct"].to_numpy(dtype=float) if len(t) else np.array([]), seed=cfg.seed))
-        if null is not None and len(t) >= 3:
-            rr = cfg.exits.reward_risk
+        ex = (exits or {}).get(name, cfg.exits)
+        if null is not None and len(t) >= 3 and ex.stop_mode != "none":
+            rr = ex.reward_risk
             rr_eff = 1.0 / rr if name.startswith("inv_") else rr
-            stop_atr = _stop_atr(t, cfg.exits.atr_stop_mult)
+            stop_atr = _stop_atr(t, ex.atr_stop_mult)
             m["null_stop_atr"] = stop_atr
             m.update(
                 null.test(
