@@ -171,6 +171,18 @@ def test_reverse_signal_flips_position_at_next_open(cal):
     assert pf.positions["SPY"].side == -1 and pf.positions["SPY"].entry_fill == 99.5
 
 
+def test_reverse_to_short_when_long_only_just_exits(cal):
+    bars = make_bars(cal, [(100, 100, 100, 100), (100, 100, 100, 100), (99.5, 99.5, 99.5, 99.5)])
+    pf = _flex_pf(allow_short=False)
+    pf.on_bar(bars[0])
+    pf.submit(_sig(bars[0], 1), bars[0])
+    pf.on_bar(bars[1])
+    pf.submit(replace(_sig(bars[1], -1), reverse=True), bars[1])
+    pf.on_bar(bars[2])
+    assert pf.closed[0].exit_reason == "signal" and pf.closed[0].exit_price == 99.5
+    assert not pf.positions and not pf.rejections
+
+
 def test_non_reverse_opposite_signal_is_still_ignored(cal):
     bars = make_bars(cal, [(100, 100, 100, 100), (100, 100, 100, 100), (99, 99, 99, 99)])
     pf = _flex_pf()

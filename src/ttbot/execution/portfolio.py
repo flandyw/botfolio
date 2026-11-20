@@ -16,7 +16,7 @@ Execution rules (identical in backtest and forward paper trading):
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -131,6 +131,13 @@ class Portfolio:
                 self.pending[sig.symbol] = _Pending(sig)
             return
         reversing = sig.reverse and pos is not None and not pos.hold and pos.side != sig.side
+        if reversing and sig.side < 0 and not self.risk.allow_short:
+            sig = replace(sig, exit=True)
+            if sig.symbol in self.pending:
+                self._reject("already_in_position")
+            else:
+                self.pending[sig.symbol] = _Pending(sig)
+            return
         if (pos is not None and not reversing) or sig.symbol in self.pending:
             self._reject("already_in_position")
             return
