@@ -54,11 +54,12 @@ def build_roster(cfg: AppConfig) -> list[Strategy[Any]]:
                 raise ValueError(f"{spec.name}: starting_capital is global and cannot be overridden per strategy")
             exits = cfg.exits.model_copy(update=spec.exits) if spec.exits else None
             risk = cfg.risk.model_copy(update=spec.risk) if spec.risk else None
-            strat = REGISTRY[spec.kind](f"{spec.name}_{tf}m", tf, params, spec.symbols, atr_p)
+            spec_atr = (exits or cfg.exits).atr_period
+            strat = REGISTRY[spec.kind](f"{spec.name}_{tf}m", tf, params, spec.symbols, spec_atr)
             strat.exits, strat.risk = exits, risk
             roster.append(strat)
             if cfg.include_inverse and spec.kind != "random":
-                inner = REGISTRY[spec.kind](f"{spec.name}_{tf}m", tf, params, spec.symbols, atr_p)
+                inner = REGISTRY[spec.kind](f"{spec.name}_{tf}m", tf, params, spec.symbols, spec_atr)
                 inner.exits, inner.risk = exits, risk
                 roster.append(InverseStrategy(inner))
     if not any(s.kind == "random" for s in roster):

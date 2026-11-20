@@ -111,3 +111,11 @@ def test_per_strategy_starting_capital_is_rejected(cfg):
     )
     with pytest.raises(ValueError, match="starting_capital"):
         build_roster(bad)
+
+
+def test_per_strategy_atr_period_reaches_strategy(cfg):
+    from ttbot.config import StrategySpec
+
+    spec = StrategySpec(name="x", kind="noise_area", timeframes=[1], exits={"atr_period": 7})
+    roster = build_roster(cfg.model_copy(update={"strategies": [spec]}))
+    assert {s.atr_period for s in roster if s.name.endswith("x_1m")} == {7}
