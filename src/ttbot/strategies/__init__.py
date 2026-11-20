@@ -50,6 +50,8 @@ def build_roster(cfg: AppConfig) -> list[Strategy[Any]]:
             if spec.kind == "random":
                 params.setdefault("seed", cfg.seed)
                 params.setdefault("trades_per_day", cfg.random_baseline_trades_per_day)
+            if "starting_capital" in spec.risk:
+                raise ValueError(f"{spec.name}: starting_capital is global and cannot be overridden per strategy")
             exits = cfg.exits.model_copy(update=spec.exits) if spec.exits else None
             risk = cfg.risk.model_copy(update=spec.risk) if spec.risk else None
             strat = REGISTRY[spec.kind](f"{spec.name}_{tf}m", tf, params, spec.symbols, atr_p)

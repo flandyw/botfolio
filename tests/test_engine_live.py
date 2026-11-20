@@ -99,3 +99,15 @@ def test_live_matches_backtest_trades(cfg, rw_df, cal):
     bt = sorted((t.trade_id, round(t.net_pnl, 6)) for t in e.drain().trades)
     lv = sorted(zip(live["trade_id"], live["net_pnl"].round(6), strict=True))
     assert bt == lv
+
+
+def test_per_strategy_starting_capital_is_rejected(cfg):
+    import pytest
+
+    from ttbot.config import StrategySpec
+
+    bad = cfg.model_copy(
+        update={"strategies": [StrategySpec(name="x", kind="noise_area", timeframes=[1], risk={"starting_capital": 1})]}
+    )
+    with pytest.raises(ValueError, match="starting_capital"):
+        build_roster(bad)
