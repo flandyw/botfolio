@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -14,7 +15,8 @@ from botfolio.dashboard_ui import render_news, render_paper
 from botfolio.events.store import EventStore
 from botfolio.storage import Storage
 
-st.set_page_config(page_title="Botfolio Paper Trading", page_icon="📊", layout="wide")
+ICON = Path(__file__).resolve().parents[1] / "assets" / "icon.svg"
+st.set_page_config(page_title="Botfolio control room", page_icon=str(ICON) if ICON.exists() else None, layout="wide")
 
 
 @st.cache_resource
@@ -44,7 +46,7 @@ if dashboard_password:
         st.rerun()
 cfg = load_config()
 st.sidebar.title("Botfolio")
-page = st.sidebar.radio("Explore", ["Paper trading", "News & AI"])
+page = st.sidebar.radio("Page", ["Paper trading", "News & AI"])
 if st.sidebar.button("Refresh page"):
     st.rerun()
 

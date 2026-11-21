@@ -1,5 +1,7 @@
 # Read-only paper dashboard
 
+**Desk** shows the paper account, the three strategies with their last run and orders, positions and recent orders. **Markets** shows the watchlist as a sortable table beside the chart; filter it, click a row or use the arrow keys.
+
 Run the worker status API from the repository root.
 
 ```bash

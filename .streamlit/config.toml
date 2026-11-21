@@ -1,0 +1,13 @@
+# Control room theme; matches the read-only web dashboard.
+[theme]
+base = "light"
+primaryColor = "#1b1a17"
+backgroundColor = "#f6f4ee"
+secondaryBackgroundColor = "#ebe7db"
+textColor = "#1b1a17"
+borderColor = "#cfcabc"
+linkColor = "#1b1a17"
+font = "'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif"
+codeFont = "'IBM Plex Mono', ui-monospace, Menlo, monospace"
+baseRadius = "2px"
+showWidgetBorder = true

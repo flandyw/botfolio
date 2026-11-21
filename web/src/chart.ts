@@ -7,28 +7,46 @@ import {
   type IChartApi,
 } from "lightweight-charts";
 
+const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+/** "#rrggbb" with an alpha channel. */
+export const alpha = (hex: string, a: number) =>
+  `${hex}${Math.round(a * 255).toString(16).padStart(2, "0")}`;
+
+/** Current theme colours for chart series. */
+export const palette = () => ({ up: css("--up"), down: css("--down"), dim: css("--dim"), faint: css("--faint") });
+
+/** Indicator lines, readable on both themes. */
+export const LINES = { sma20: "#b07a1e", ema50: "#8a63b5", vwap: "#2b8591", bb: "#74829a", rsi: "#8d877b" };
+
 export function themeOptions(): DeepPartial<ChartOptions> {
-  const s = getComputedStyle(document.documentElement);
-  const v = (k: string) => s.getPropertyValue(k).trim();
   return {
     layout: {
-      background: { type: ColorType.Solid, color: v("--card") || "#0e121a" },
-      textColor: v("--muted-foreground") || "#8a94a8",
-      fontFamily: "'Geist Mono Variable', ui-monospace, monospace",
+      background: { type: ColorType.Solid, color: css("--bg") },
+      textColor: css("--dim"),
+      fontFamily: "'IBM Plex Mono', ui-monospace, monospace",
       fontSize: 11,
       attributionLogo: false,
     },
-    grid: {
-      vertLines: { color: v("--grid") || "#131926" },
-      horzLines: { color: v("--grid") || "#131926" },
-    },
-    rightPriceScale: { borderColor: v("--border") || "#1d2433" },
-    timeScale: { borderColor: v("--border") || "#1d2433", timeVisible: true, secondsVisible: false },
+    grid: { vertLines: { color: css("--hair") }, horzLines: { color: css("--hair") } },
+    rightPriceScale: { borderColor: css("--rule") },
+    timeScale: { borderColor: css("--rule"), timeVisible: true, secondsVisible: false },
     crosshair: {
-      vertLine: { color: v("--ring") || "#3a4761", labelBackgroundColor: v("--secondary") || "#171d2a" },
-      horzLine: { color: v("--ring") || "#3a4761", labelBackgroundColor: v("--secondary") || "#171d2a" },
+      vertLine: { color: css("--faint"), labelBackgroundColor: css("--ink") },
+      horzLine: { color: css("--faint"), labelBackgroundColor: css("--ink") },
     },
   };
+}
+
+/** Changes whenever the light or dark theme is toggled, so series can pick up new colours. */
+export function useThemeKey() {
+  const [key, setKey] = useState(0);
+  useEffect(() => {
+    const mo = new MutationObserver(() => setKey((k) => k + 1));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => mo.disconnect();
+  }, []);
+  return key;
 }
 
 /**

@@ -3,6 +3,7 @@ import json
 from datetime import UTC, datetime
 
 from botfolio.config import AppConfig
+from botfolio.events.store import EventStore
 from botfolio.storage import Storage
 from botfolio.webapi import create_app
 
@@ -49,5 +50,15 @@ def test_paper_api_uses_worker_state_and_saved_watchlist(tmp_path):
     assert state["strategies"]["momentum"]["note"] == "2 breakouts"
     assert state["armed"] is True
     assert state["open_intents"] == 2
+    assert state["strategy_config"]["etf_trend"]["enabled"] is True and state["intents"] == []
+    storage.put("watchlist", ["AAPL", "SPY"])
+    assert json.loads(request(app, "/api/config")[1])["etfs"] == ["SPY"]
+    EventStore(storage)
+    with storage.tx() as conn:
+        conn.execute("INSERT INTO event_orders VALUES (?,?)", ("a", json.dumps(
+            {"state": "submitted", "symbol": "SPY", "strategy": "etf_trend", "side": "long", "qty": 1.5, "limit": 1})))
+        conn.execute("INSERT INTO event_orders VALUES (?,?)", ("b", json.dumps({"state": "closed", "symbol": "QQQ"})))
+    assert json.loads(request(app, "/api/live")[1])["intents"] == [
+        {"strategy": "etf_trend", "symbol": "SPY", "side": "long", "qty": 1.5, "state": "submitted"}]
     assert request(app, "/api/live", "POST")[0] == 405
     storage.close()

@@ -1,5 +1,7 @@
 """Read-only API for the paper worker's watchlist and execution status."""
 
+import json
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,12 +28,25 @@ def create_app(cfg: AppConfig) -> Starlette:
             storage.close()
 
     async def config(_):
-        return JSONResponse({"symbols": watchlist(storage, cfg), "feed": cfg.data.feed})
+        symbols = watchlist(storage, cfg)
+        return JSONResponse({"symbols": symbols, "etfs": [s for s in symbols if s in set(cfg.etfs)],
+                             "feed": cfg.data.feed})
+
+    def intents():
+        try:
+            with storage.tx() as conn:
+                rows = [json.loads(payload) for (payload,) in conn.execute("SELECT payload FROM event_orders")]
+        except sqlite3.OperationalError:  # the worker has not created its journal yet
+            return []
+        keep = ("symbol", "strategy", "side", "qty", "state", "opened", "exit_requested")
+        return [{"strategy": "news", **{k: row.get(k) for k in keep if row.get(k) is not None}}
+                for row in rows if row.get("state") != "closed"]
 
     async def live(_):
         heartbeat = storage.get("event-heartbeat")
         state = storage.get("event-execution-state") or {}
         now = datetime.now(UTC)
+        limits = cfg.limits()
         return JSONResponse({
             "heartbeat": heartbeat,
             "heartbeat_age_s": (now - datetime.fromisoformat(heartbeat)).total_seconds() if heartbeat else None,
@@ -42,6 +57,15 @@ def create_app(cfg: AppConfig) -> Starlette:
             "armed": bool(storage.get("event-paper-armed")),
             "open_intents": state.get("open_intents"),
             "strategies": storage.get("strategy-status") or {},
+            "strategy_config": {
+                "news": {"enabled": cfg.strategies.news.enabled, **limits["news"]},
+                "momentum": {"enabled": cfg.strategies.momentum.enabled, **limits["momentum"]},
+                "etf_trend": {"enabled": cfg.strategies.etf_trend.enabled, **limits["etf_trend"],
+                              "allocation_pct": cfg.strategies.etf_trend.allocation_pct,
+                              "sma_days": cfg.strategies.etf_trend.sma_days},
+            },
+            "news_check": storage.get("event-last-entry-check"),
+            "intents": intents(),
         })
 
     routes = [Route("/api/config", config), Route("/api/live", live)]

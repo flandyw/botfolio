@@ -21,6 +21,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 COPY config ./config
 COPY dashboard ./dashboard
+COPY .streamlit ./.streamlit
+COPY assets ./assets
 RUN uv sync --frozen --no-dev && mkdir -p /app/data && chown -R botfolio:botfolio /app
 
 USER botfolio

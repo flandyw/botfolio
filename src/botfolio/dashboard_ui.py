@@ -53,7 +53,8 @@ def render_news(store):
         st.warning("These are archived articles. The newest is more than a day old; do not treat these assessments as current signals.")
     st.caption(f"Showing up to 20 of {len(shown)} saved records. Times are UTC. One article may mention several tickers.")
     for event in shown[:20]:
-        with st.container(border=True):
+        with st.container():
+            st.divider()
             record = latest.loc[event.key] if event.key in latest.index else None
             decision = json.loads(record.payload) if record is not None else None
             st.subheader(f"{event.ticker} · {ACTIONS.get(decision['recommended_action'], 'Not assessed') if decision else 'Not assessed'}")
@@ -78,22 +79,9 @@ def render_news(store):
 
 
 def render_paper(cfg, storage):
-    st.title("Paper trading control room")
-    st.write("Actual orders at Alpaca's paper broker, using simulated money. Real-money trading is not supported.")
+    st.title("Control room")
+    st.caption("Orders go to Alpaca's paper broker and use simulated money. Real-money trading is not supported.")
     watchlist = load_watchlist(storage, cfg)
-    st.session_state.setdefault("event_watchlist_symbols", ", ".join(watchlist))
-    with st.form("event_watchlist"):
-        value = st.text_area(f"Watchlist ({len(watchlist)} symbols)", key="event_watchlist_symbols",
-            help=f"Enter up to {MAX_WATCHLIST} ticker symbols, separated by commas. Every strategy trades from this list; "
-                 "the ETF trend strategy uses the ETFs in it.")
-        if st.form_submit_button("Save watchlist"):
-            symbols = list(dict.fromkeys(part.strip().upper() for part in value.split(",") if part.strip()))
-            if (not symbols or len(symbols) > MAX_WATCHLIST
-                    or any(not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,14}", symbol) for symbol in symbols)):
-                st.error(f"Enter 1–{MAX_WATCHLIST} valid ticker symbols separated by commas.")
-            else:
-                storage.put("watchlist", symbols)
-                st.success(f"Watchlist saved with {len(symbols)} symbols. The worker will use it on its next cycle.")
     now = datetime.now(UTC)
     calendar = get_calendar("NASDAQ")
     session = calendar.session_for(now)
@@ -103,6 +91,8 @@ def render_paper(cfg, storage):
     healthy = bool(state and 0 <= (now-datetime.fromisoformat(state["at"])).total_seconds() <= 20
                    and state.get("phase") != "error")
     armed = bool(storage.get("event-paper-armed"))
+    kill = Path(os.getenv("EVENT_KILL_FILE", "data/EVENT_KILL"))
+    strategies, limits, status = cfg.strategies, cfg.limits(), storage.get("strategy-status") or {}
     a, b, c = st.columns(3)
     a.metric("Nasdaq regular session", "Open" if session else "Closed")
     b.metric("Execution monitor", "Recent check" if healthy else "Not ready")
@@ -111,9 +101,67 @@ def render_paper(cfg, storage):
         st.caption(f"Session closes {session.close.astimezone(ZoneInfo('America/New_York')):%H:%M} Eastern. Entries stop five minutes before closing; time exits begin two minutes before closing.")
     elif upcoming:
         st.caption(f"Next regular open: {upcoming.open.astimezone(ZoneInfo('America/New_York')):%a %d %b, %H:%M} Eastern. Holidays, early closes and daylight saving are included.")
-    strategies, limits, status = cfg.strategies, cfg.limits(), storage.get("strategy-status") or {}
+    data = storage.get("event-data-status") or {}
+    latest = data.get("latest_content")
+    if not latest or now-datetime.fromisoformat(latest) > timedelta(minutes=5):
+        st.warning("No current news is available. Old articles cannot trigger news entries; momentum and ETF trend are unaffected.")
+    if data.get("provider_failures"):
+        st.error("A data provider failed its last check. Entries are blocked for that collection cycle.")
+    if data.get("issuer_feed_failures"):
+        st.warning("One or more issuer news feeds failed their last check.")
+    if state.get("message"):
+        st.error(state["message"])
+    if not configured():
+        st.info("Broker execution is disabled in this deployment. The app operator must enable paper execution and confirm a dedicated paper account before entries can be armed.")
+
+    st.divider()
+    entries, stop = st.columns([3, 2], gap="large")
+    with entries:
+        st.subheader("New entries")
+        if configured() and armed:
+            st.success("**Paper entries are ON.** The bot will place a paper trade when any strategy gives a valid signal "
+                       "during market hours." + ("" if session else " Right now it is waiting because the market is closed."))
+        else:
+            st.info("**Paper entries are OFF.** The bot will not open new trades.")
+        dedicated = st.checkbox("This paper account is used only by this bot.",
+            help="A dedicated Alpaca paper account with no manual trading and no other bot.")
+        ready = [("Paper execution switched on by the app operator", configured()),
+                 ("Background worker checked in within the last 20 seconds", healthy),
+                 ("Dedicated paper account confirmed (box above)", dedicated)]
+        if not all(ok for _, ok in ready):
+            st.markdown("**Enable** unlocks when nothing below is still needed:\n\n" +
+                        "\n".join(f"- {'Done' if ok else '**Still needed**'}: {label}" for label, ok in ready))
+        ai_ready = os.getenv("EVENT_AI_PROVIDER", "disabled") != "disabled" and bool(os.getenv("EVENT_AI_KEY"))
+        if strategies.news.enabled and not ai_ready:
+            st.caption("No AI news reader is set up, so the news strategy will not trade. "
+                       "Momentum and ETF trend do not need one.")
+        left, right = st.columns(2)
+        if left.button("Enable paper entries", disabled=armed or not all(ok for _, ok in ready), type="primary"):
+            storage.put("event-paper-armed", True)
+            st.rerun()
+        if right.button("Pause new entries", disabled=not armed):
+            storage.put("event-paper-armed", False)
+            st.rerun()
+        st.caption("Pausing stops new trades only; positions already open are still managed and closed normally.")
+    with stop:
+        st.subheader("Emergency stop")
+        st.caption("Pauses entries, cancels the bot's open orders and closes its paper positions during regular hours.")
+        if st.button("Emergency stop paper trading"):
+            storage.put("event-paper-armed", False)
+            kill.parent.mkdir(parents=True, exist_ok=True)
+            kill.touch()
+            st.rerun()
+        if kill.exists():
+            st.warning("Emergency stop is active. Position closure requires a healthy worker, broker connection and an open market.")
+            if st.button("Clear emergency stop; keep entries paused"):
+                kill.unlink(missing_ok=True)
+                storage.put("event-paper-armed", False)
+                st.rerun()
+
+    st.divider()
     st.subheader("Strategies")
-    st.caption("Each strategy places real orders in the Alpaca Paper account. A symbol is held by one strategy at a time.")
+    st.caption("Each strategy places real orders in the Alpaca Paper account. A symbol is held by one strategy at a time. "
+               "All strategies share a 3% daily loss cutoff, the pause switch and the emergency stop. Stops can gap beyond the allowance.")
     st.dataframe(pd.DataFrame([
         dict(Strategy="News + AI", On=strategies.news.enabled, Trades="Fresh watchlist news with a directional AI call",
              Limits=f"{limits['news']['max_positions']} positions · {limits['news']['position_pct']:g}% of equity each · "
@@ -127,70 +175,37 @@ def render_paper(cfg, storage):
              Limits=f"{strategies.etf_trend.allocation_pct:g}% of equity across {len(cfg.etfs)} ETFs",
              Latest=status.get("etf_trend", {}).get("note", "")),
     ]), hide_index=True)
-    st.info("All strategies share a 3% daily loss cutoff, the pause switch and the emergency stop. Stops can gap beyond the allowance.")
-    data = storage.get("event-data-status") or {}
-    latest = data.get("latest_content")
-    stale_news = not latest or now-datetime.fromisoformat(latest) > timedelta(minutes=5)
-    if stale_news:
-        st.warning("No current news is available. Old articles cannot trigger news entries; momentum and ETF trend are unaffected.")
-    if data.get("provider_failures"):
-        st.error("A data provider failed its last check. Entries are blocked for that collection cycle.")
-    if data.get("issuer_feed_failures"):
-        st.warning("One or more issuer news feeds failed their last check.")
-    if state.get("message"):
-        st.error(state["message"])
-    if not configured():
-        st.info("Broker execution is disabled in this deployment. The app operator must enable paper execution and confirm a dedicated paper account before entries can be armed.")
-    ai_ready = os.getenv("EVENT_AI_PROVIDER", "disabled") != "disabled" and bool(os.getenv("EVENT_AI_KEY"))
-    with st.container(border=True):
-        st.markdown("**Turn new paper trades on or off**")
-        if configured() and armed:
-            st.success("**Paper entries are ON.** The bot will place a paper trade when any strategy gives a valid signal "
-                       "during market hours." + ("" if session else " Right now it is waiting because the market is closed."))
-        else:
-            st.info("**Paper entries are OFF.** The bot will not open new trades.")
-        dedicated = st.checkbox("I confirm this is a dedicated Alpaca paper account with no manual or other bot trading.")
-        ready = [("Paper execution switched on by the app operator", configured()),
-                 ("Background worker checked in within the last 20 seconds", healthy),
-                 ("Dedicated paper account confirmed (box above)", dedicated)]
-        if strategies.news.enabled and not ai_ready:
-            st.caption("No AI news reader is set up, so the news strategy will not trade. "
-                       "Momentum and ETF trend do not need one.")
-        if not all(ok for _, ok in ready):
-            st.markdown("The **Enable** button unlocks when every item is ticked:\n\n" +
-                        "\n".join(f"- {'✅' if ok else '❌'} {label}" for label, ok in ready))
-        left, right = st.columns(2)
-        if left.button("Enable paper entries", disabled=armed or not all(ok for _, ok in ready), type="primary"):
-            storage.put("event-paper-armed", True)
-            st.rerun()
-        if right.button("Pause new entries", disabled=not armed):
-            storage.put("event-paper-armed", False)
-            st.rerun()
-        st.caption("Pausing stops new trades only; positions already open are still managed and closed normally.")
-    kill = Path(os.getenv("EVENT_KILL_FILE", "data/EVENT_KILL"))
-    with st.container(border=True):
-        st.markdown("**🛑 Emergency stop**")
-        st.caption("Pauses entries, cancels the bot's open orders and closes its paper positions during regular hours.")
-        if st.button("Emergency stop paper trading"):
-            storage.put("event-paper-armed", False)
-            kill.parent.mkdir(parents=True, exist_ok=True)
-            kill.touch()
-            st.rerun()
-        if kill.exists():
-            st.warning("Emergency stop is active. Position closure requires a healthy worker, broker connection and an open market.")
-            if st.button("Clear emergency stop; keep entries paused"):
-                kill.unlink(missing_ok=True)
-                storage.put("event-paper-armed", False)
-                st.rerun()
-    check = storage.get("event-last-entry-check")
-    if check:
-        st.write("Latest entry check", check)
+
+    st.divider()
+    st.subheader("Watchlist")
+    st.session_state.setdefault("event_watchlist_symbols", ", ".join(watchlist))
+    with st.form("event_watchlist", border=False):
+        value = st.text_area(f"Watchlist ({len(watchlist)} symbols)", key="event_watchlist_symbols", height=140,
+            help=f"Enter up to {MAX_WATCHLIST} ticker symbols, separated by commas. Every strategy trades from this list; "
+                 "the ETF trend strategy uses the ETFs in it.")
+        if st.form_submit_button("Save watchlist"):
+            symbols = list(dict.fromkeys(part.strip().upper() for part in value.split(",") if part.strip()))
+            if (not symbols or len(symbols) > MAX_WATCHLIST
+                    or any(not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,14}", symbol) for symbol in symbols)):
+                st.error(f"Enter 1–{MAX_WATCHLIST} valid ticker symbols separated by commas.")
+            else:
+                storage.put("watchlist", symbols)
+                st.success(f"Watchlist saved with {len(symbols)} symbols. The worker will use it on its next cycle.")
+
+    st.divider()
+    st.subheader("Broker order journal")
     with storage.tx() as conn:
         rows = conn.execute("SELECT event_key,payload FROM event_orders").fetchall()
     if rows:
-        st.subheader("Broker order journal")
-        st.dataframe(pd.DataFrame([dict(event=key, **{"strategy": "news", **json.loads(payload)})
-                                   for key, payload in rows]), hide_index=True)
+        journal = pd.DataFrame([dict(event=key, **{"strategy": "news", **json.loads(payload)}) for key, payload in rows])
+        first = [c for c in ("opened", "strategy", "symbol", "side", "qty", "limit", "stop", "state", "broker_status",
+                             "exit_requested") if c in journal.columns]
+        if "opened" in journal.columns:
+            journal = journal.sort_values("opened", ascending=False)
+        st.dataframe(journal[first + [c for c in journal.columns if c not in first]], hide_index=True)
     else:
         st.info("No broker orders have been recorded. The system waits for a valid signal from any strategy.")
+    check = storage.get("event-last-entry-check")
+    if check:
+        st.caption(f"Latest news entry check: {check.get('ticker', '')} {check.get('result', '')} ({check.get('at', '')})")
     st.caption("Use Refresh page to update status. A recent check is not an uptime guarantee. Paper trading does not establish live profitability.")

@@ -81,7 +81,7 @@ def test_paper_control_room_is_safe_by_default(app_env, monkeypatch, tmp_path):
     app.radio[0].set_value("Paper trading").run()
     assert not app.exception
     assert button(app, "Enable paper entries").disabled
-    assert any("❌" in item.value for item in app.markdown)  # Says why the button is locked.
+    assert any("Still needed" in item.value for item in app.markdown)  # Says why the button is locked.
     assert any("No current news" in item.value for item in app.warning)
     button(app, "Emergency stop paper trading").click().run()
     assert (tmp_path/"KILL").exists()

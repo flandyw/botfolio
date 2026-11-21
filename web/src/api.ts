@@ -17,10 +17,43 @@ export type Live = {
   enabled: boolean;
   armed: boolean;
   open_intents: number | null;
+  strategies: Partial<Record<StrategyName, StrategyStatus>>;
+  strategy_config: Record<StrategyName, StrategyConfig>;
+  news_check: { at: string; ticker: string; result: string } | null;
+  intents: Intent[];
+};
+
+export type StrategyName = "news" | "momentum" | "etf_trend";
+
+export type StrategyStatus = {
+  at?: string;
+  note?: string | null;
+  orders?: { symbol: string; side: string; result: string }[];
+};
+
+export type StrategyConfig = {
+  enabled: boolean;
+  max_positions: number;
+  position_pct: number;
+  risk_pct?: number;
+  allocation_pct?: number;
+  sma_days?: number;
+};
+
+/** An order or position the worker is managing, and the strategy that owns it. */
+export type Intent = {
+  symbol: string;
+  strategy: StrategyName;
+  side: string;
+  qty: number;
+  state: string;
+  opened?: string;
+  exit_requested?: string;
 };
 
 export type Config = {
   symbols: string[];
+  etfs: string[];
   feed: string;
 };
 
