@@ -293,6 +293,18 @@ def test_runner_trades_etfs_and_momentum_live_then_exits_through_the_broker(pape
     assert not paper.open_intents() and not broker.positions
 
 
+def test_momentum_skips_symbols_held_by_another_strategy(paper):
+    broker, data = paper.client, Data()
+    data.asks = {"SPY": 600.0, "UP": 101.5, "DOWN": 99.01}
+    paper.submit([Signal("news", "news-UP", "UP", 1, stop_pct=.01, target_r=2)], {"UP": quote(101.5)}, NOW)
+    paper.limits["momentum"]["max_positions"] = paper.cfg.strategies.momentum.max_positions = 1
+    runner = StrategyRunner(paper.cfg, data, paper, paper.store.storage)
+    runner.clock = lambda: broker.now
+    status = runner.run()
+    # UP is the strongest breakout but belongs to the news strategy, so the one free slot goes to DOWN.
+    assert status["momentum"]["orders"] == [dict(symbol="DOWN", side="short", result="submitted")]
+
+
 def test_runner_waits_for_market_and_execution_readiness(paper):
     runner = StrategyRunner(paper.cfg, Data(), paper, paper.store.storage)
     runner.clock = lambda: datetime(2025, 1, 4, 16, tzinfo=UTC)  # Saturday

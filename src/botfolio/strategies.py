@@ -165,8 +165,11 @@ class StrategyRunner:
                             if state["side"] and now - state["bar_end"] <= timedelta(minutes=10)),
                            key=lambda item: item[1]["strength"], reverse=True)
         free = cfg.max_positions - len(held)
+        # Symbols another strategy holds are skipped, so they cannot crowd out the next-strongest breakouts.
+        taken = {intent["symbol"] for intent in self.paper.open_intents()}
         signals = [Signal("momentum", f"momentum-{symbol}-{self._day}", symbol, state["side"], stop=state["stop"])
-                   for symbol, state in breakouts if f"momentum-{symbol}-{self._day}" not in self._done]
+                   for symbol, state in breakouts
+                   if symbol not in taken and f"momentum-{symbol}-{self._day}" not in self._done]
         results = self._send("momentum", signals[:max(0, free) * 3], free)
         submitted += sum(result == "submitted" for result in results.values())
         self._slot = (slot, symbols, states, submitted)
