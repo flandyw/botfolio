@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { type AlpacaSnapshotsResponse, type AlpacaStatus, type Config, type Live, savedPassword } from "./api";
+import { type AlpacaSnapshotsResponse, type AlpacaStatus, type Config, LOCKED, type Live, savedPassword } from "./api";
 import { cx } from "./classes";
 import { Control } from "./Control";
 import { Desk } from "./Desk";
@@ -86,6 +86,11 @@ export default function App() {
   const workerOk = age != null && age >= 0 && age < 120;
   const armed = Boolean(live.data?.enabled && live.data.armed);
   const [unlocked, setUnlocked] = useState(() => Boolean(savedPassword()));
+  useEffect(() => {
+    const lock = () => setUnlocked(false);
+    addEventListener(LOCKED, lock);
+    return () => removeEventListener(LOCKED, lock);
+  }, []);
   const locked = Boolean(config.data?.password_required) && !unlocked;
 
   return (

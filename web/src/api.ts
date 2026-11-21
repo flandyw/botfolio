@@ -241,11 +241,19 @@ export class ApiError extends Error {
   }
 }
 
-async function call<T>(path: string, init: RequestInit, password = savedPassword()): Promise<T> {
+/** Fired when the saved password is refused, e.g. after it was changed on the server. */
+export const LOCKED = "botfolio-locked";
+
+async function call<T>(path: string, init: RequestInit, given?: string): Promise<T> {
+  const password = given ?? savedPassword();
   const headers = { ...(init.headers as Record<string, string>), ...(password && { "X-Botfolio-Password": password }) };
   const r = await fetch(`/api/${path}`, { ...init, headers });
   const text = await r.text();
   if (!r.ok) {
+    if (r.status === 401 && given === undefined) {
+      savePassword("");
+      dispatchEvent(new Event(LOCKED));
+    }
     let message = text || r.statusText;
     try {
       message = (JSON.parse(text) as { error?: string }).error ?? message;
