@@ -35,6 +35,7 @@ class Signal:
     hold_minutes: int | None = None  # timed exit; intraday positions are always flat before the close
     intraday: bool = True           # False: held overnight until the strategy requests an exit
     fractional: bool = False        # long-only simple orders may use fractional shares
+    position_pct: float | None = None  # a smaller position than the strategy's cap, as a percent of equity
     fresh: Callable[[datetime], bool] | None = None
 
 
@@ -307,7 +308,8 @@ class PaperExecutor:
         stop = signal.stop
         if signal.stop_pct is not None:
             stop = limit * (1 - direction*signal.stop_pct)
-        size = min(eq*limits["position_pct"]/100/limit, buying_power*.9/limit)
+        pct = limits["position_pct"] if signal.position_pct is None else min(limits["position_pct"], signal.position_pct)
+        size = min(eq*pct/100/limit, buying_power*.9/limit)
         if stop is not None:
             stop = round(stop, 2)
             # Alpaca rejects a stop on the wrong side of, or within a cent of, the entry price.

@@ -34,12 +34,24 @@ const STRATEGIES: { name: StrategyName; title: string; trades: (c?: StrategyConf
     title: "ETF trend",
     trades: (c) => `Watchlist ETFs above their ${c?.sma_days ?? 200}-day average, held overnight`,
   },
+  {
+    name: "etf_rotation",
+    title: "ETF rotation",
+    trades: (c) => `The ${c?.max_positions ?? 5} watchlist ETFs with the strongest 1 to 12-month momentum`,
+  },
+  {
+    name: "cash_park",
+    title: "Parked cash",
+    trades: (c) => `Cash the ETF strategies are not using, held in ${c?.symbol ?? "a Treasury-bill ETF"}`,
+  },
 ];
 const TITLES = Object.fromEntries(STRATEGIES.map((s) => [s.name, s.title])) as Record<StrategyName, string>;
 
 function limits(name: StrategyName, c: StrategyConfig | undefined, etfs: number) {
   if (!c) return "—";
   if (name === "etf_trend") return `${num(c.allocation_pct, 0)}% of equity across ${etfs} ETFs`;
+  if (name === "etf_rotation") return `${num(c.allocation_pct, 0)}% of equity across ${c.max_positions} ETFs`;
+  if (name === "cash_park") return `Up to ${num(c.position_pct, 0)}% of equity`;
   return `${c.max_positions} positions, ${num(c.position_pct, 0)}% of equity each, ${num(c.risk_pct, 1)}% at risk`;
 }
 

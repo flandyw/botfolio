@@ -1,14 +1,16 @@
 # Botfolio
 
-Botfolio runs three strategies in one worker and sends every signal to a dedicated Alpaca Paper account as a real paper order. All execution uses paper money.
+Botfolio runs five strategies in one worker and sends every signal to a dedicated Alpaca Paper account as a real paper order. All execution uses paper money.
 
 | Strategy | Trades | Entry | Exit |
 |---|---|---|---|
 | News + AI | Watchlist stocks and ETFs | Fresh news scored `BUY` or `SELL` by the AI provider | Stop, profit target or 15-minute timer |
 | Intraday momentum | Whole watchlist, long and short | 30-minute close outside its usual range for that time of day, on the right side of VWAP | Stop at the far side of the range, a close back inside it, or before the close |
 | ETF trend | ETFs in the watchlist, long only | Daily close above the 200-day average | Daily close below the average; held overnight |
+| ETF rotation | The 5 watchlist ETFs with the highest average 1, 3, 6 and 12-month return, long only | In the top 5, with a positive average return and a close above the 200-day average | Out of the top 10, a negative average return, or a close below the 200-day average; held overnight |
+| Parked cash | One Treasury-bill ETF (`BOXX`), long only | Equity that ETF trend and ETF rotation are not using, less a 5% cash reserve | Sold and bought again at the new size once it is 5% of equity away from that amount |
 
-The default watchlist in `config/default.yaml` has 124 symbols, 25 of them ETFs. `strategies` in the same file turns each strategy on or off and sets its position count and size. A symbol is held by one strategy at a time because Alpaca nets positions per symbol. There is no backtester.
+The default watchlist in `config/default.yaml` has 124 symbols, 25 of them ETFs. `strategies` in the same file turns each strategy on or off and sets its position count and size. A symbol is held by one strategy at a time because Alpaca nets positions per symbol, so ETF trend sells an ETF that enters the rotation's top 5 and ETF rotation buys it at its larger size. Alpaca Paper does not pay dividends, which is why the parked cash uses `BOXX`: it pays none and its Treasury-bill return shows in its price. There is no backtester.
 
 ## Run locally
 
@@ -26,9 +28,9 @@ In another terminal, run `uv run botfolio web`, then `npm ci && npm run dev` in 
 ## Execution
 
 - Entry begins paused. Set `EVENT_PAPER_ENABLED=true` and `EVENT_EXCLUSIVE_ACCOUNT=true` for both the worker and `botfolio web`. Confirm the dedicated paper account and enable entries on the Control page after the worker checks in.
-- Momentum and ETF trend signals are checked every 30 seconds during the session and need no AI provider.
+- Momentum, ETF trend, ETF rotation and parked cash are checked every 30 seconds during the session and need no AI provider. The parked cash is resized at most once a day and waits for the first 30 minutes of the session.
 - The worker scores fresh watchlist news with market data available at receipt. Clairic needs a supported directional `BUY` or `SELL` before a signal can reach the order checks. Issuer RSS is available in the news audit.
-- Entries require a fresh quote and the regular Nasdaq session. News orders are limit orders with a stop and profit target, momentum orders are limit orders with a stop, and ETF trend orders are fractional limit orders. The entry window ends five minutes before close. The news exit timer is 15 minutes. News and momentum positions begin closing two minutes before the session closes; ETF trend positions stay open.
+- Entries require a fresh quote and the regular Nasdaq session. News orders are limit orders with a stop and profit target, momentum orders are limit orders with a stop, and ETF trend, ETF rotation and parked cash orders are fractional limit orders. The entry window ends five minutes before close. The news exit timer is 15 minutes. News and momentum positions begin closing two minutes before the session closes; ETF trend, ETF rotation and parked cash positions stay open.
 - **Pause entries** keeps the execution monitor managing existing positions. **Emergency stop** also asks the monitor to cancel its orders and close its positions during regular hours.
 - SQLite stores the watchlist, arm state, journal, and decision audit. Use the same `BOTFOLIO_DB_PATH` and `EVENT_KILL_FILE` for both processes. The existing database is compatible, including an existing armed state.
 

@@ -38,10 +38,27 @@ class TrendConfig(BaseModel):
     band_pct: float = Field(1.0, ge=0)
 
 
+class RotationConfig(BaseModel):
+    enabled: bool = False
+    allocation_pct: float = Field(40.0, gt=0, le=100)
+    top: int = Field(5, ge=1)        # ETFs held, each with allocation_pct / top of equity
+    keep: int = Field(10, ge=1)      # a holding is kept until it falls out of this many top ranks
+    sma_days: int = Field(200, ge=2)
+
+
+class CashParkConfig(BaseModel):
+    enabled: bool = False
+    symbol: str = "BOXX"
+    reserve_pct: float = Field(5.0, ge=0, le=100)  # equity left in cash
+    band_pct: float = Field(5.0, gt=0, le=100)     # resize once the position is this far from its target
+
+
 class StrategiesConfig(BaseModel):
     news: NewsConfig = Field(default_factory=NewsConfig)
     momentum: MomentumConfig = Field(default_factory=MomentumConfig)
     etf_trend: TrendConfig = Field(default_factory=TrendConfig)
+    etf_rotation: RotationConfig = Field(default_factory=RotationConfig)
+    cash_park: CashParkConfig = Field(default_factory=CashParkConfig)
 
 
 class AppConfig(BaseModel):
@@ -68,6 +85,9 @@ class AppConfig(BaseModel):
                              risk_pct=s.momentum.risk_pct),
             "etf_trend": dict(max_positions=max(1, len(self.etfs)),
                               position_pct=s.etf_trend.allocation_pct / max(1, len(self.etfs))),
+            "etf_rotation": dict(max_positions=s.etf_rotation.top,
+                                 position_pct=s.etf_rotation.allocation_pct / s.etf_rotation.top),
+            "cash_park": dict(max_positions=1, position_pct=100 - s.cash_park.reserve_pct),
         }
 
 
