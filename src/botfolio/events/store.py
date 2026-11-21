@@ -79,3 +79,30 @@ class EventStore:
     def audit(self):
         with self.storage.tx() as conn:
             return pd.read_sql_query("SELECT * FROM event_decisions", conn)
+
+    def decision_stats(self):
+        with self.storage.tx() as conn:
+            return pd.read_sql_query("""
+                WITH decisions AS (
+                    SELECT d.experiment, d.model, json_extract(e.payload, '$.source') AS source,
+                           json_extract(d.payload, '$.recommended_action') AS action,
+                           json_extract(d.payload, '$.directional_hypothesis') AS direction,
+                           json_extract(d.payload, '$.reasoning') AS reasoning,
+                           COALESCE(json_extract(d.response, '$.result.usage.input_tokens'),
+                                    json_extract(d.response, '$.usage.input_tokens')) AS input_tokens,
+                           d.latency, d.cost, d.completed_at
+                    FROM event_decisions d JOIN events e USING (event_key)
+                )
+                SELECT experiment, model, source, COUNT(*) AS decisions,
+                       SUM(action = 'BUY') AS buy, SUM(action = 'SELL') AS sell,
+                       SUM(action = 'HOLD') AS hold, SUM(action = 'WAIT') AS wait,
+                       SUM(direction = 'bullish') AS bullish, SUM(direction = 'bearish') AS bearish,
+                       SUM(reasoning = 'Provider failure or invalid structured output') AS provider_failures,
+                       ROUND(AVG(latency), 3) AS mean_latency_seconds,
+                       SUM(input_tokens) AS known_input_tokens,
+                       COUNT(cost) AS decisions_with_cost, SUM(cost) AS known_input_cost_usd,
+                       MAX(completed_at) AS latest_decision_utc
+                FROM decisions
+                GROUP BY experiment, model, source
+                ORDER BY latest_decision_utc DESC, experiment, model, source
+            """, conn)

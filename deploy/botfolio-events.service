@@ -8,7 +8,8 @@ Type=simple
 WorkingDirectory=%h/botfolio
 EnvironmentFile=%h/botfolio/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=%h/botfolio/.venv/bin/python -m botfolio events watch --experiment clef-v2
+Environment=EVENT_AI_EXPERIMENT=events-v3
+ExecStart=%h/botfolio/.venv/bin/python -m botfolio events watch --experiment ${EVENT_AI_EXPERIMENT}
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

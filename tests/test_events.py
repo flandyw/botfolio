@@ -223,13 +223,62 @@ def test_news_provider_pagination_and_revisions():
     article = dict(id=1, symbols=["SPY", "NVDA"], created_at=AT.isoformat(),
                    updated_at=(AT+timedelta(seconds=1)).isoformat(), source="fixture",
                    url="https://example.com/1", headline="Earnings", content="<p>Original</p>")
-    client._request.side_effect = [{"news": [article], "next_page_token": "page2"}, {"news": []}]
+    blank = dict(article, id=2, headline="<br>", content=None, summary="")
+    client._request.side_effect = [{"news": [blank], "next_page_token": "page2"}, {"news": [article]}]
     rows = AlpacaNews(client, ["SPY"]).fetch(AT, AT+timedelta(days=1))
     assert len(rows) == 1
     assert rows[0].ticker == "SPY"
     assert "Original" in rows[0].text
     assert rows[0].content_at > rows[0].published_at
     assert client._request.call_count == 2
+
+
+def test_clairic_adapter_and_decision_stats(monkeypatch):
+    monkeypatch.setenv("EVENT_AI_PROVIDER", "clairic")
+    monkeypatch.setenv("EVENT_AI_MODEL", "clairic")
+    monkeypatch.setenv("EVENT_AI_URL", "https://example.com/inference")
+    monkeypatch.setenv("EVENT_AI_KEY", "test-only")
+    e = event()
+    expected = decision(e)
+    enums = {name for name, field in expected.model_json_schema()["properties"].items() if "enum" in field}
+    answers = {key: {"value": value, "valid": True, "complete": True}
+               for key, value in expected.model_dump().items() if key in enums}
+    answers["evidence"] = {"value": e.text}
+    response = Mock()
+    response.json.return_value = {"result": {"answers": answers, "usage": {"input_tokens": 123}}}
+    post = Mock(return_value=response)
+    monkeypatch.setattr("botfolio.events.ai.requests.post", post)
+    store = EventStore(Storage(":memory:"))
+    store.add(e)
+    assert analyze(store, e, "clairic-v1", AI(), {})[0].side() == 1
+    request = post.call_args.kwargs["json"]
+    assert request["fields"]["recommended_action"]["type"] == "enum"
+    assert isinstance(request["state"], str)
+    answers["recommended_action"]["value"] = None
+    assert analyze(store, e, "clairic-v2", AI(), {})[0].side() == 0
+    stats = store.decision_stats().set_index("experiment")
+    assert stats.loc["clairic-v1", "buy"] == 1
+    assert stats.loc["clairic-v2", "wait"] == 1
+    assert stats.loc["clairic-v1", "known_input_tokens"] == 123
+
+
+def test_issuer_news_reads_rss_and_atom():
+    from botfolio.events.providers import IssuerNews
+
+    for xml in (
+        "<rss><channel><item><title>Results</title><description>&lt;b&gt;Growth&lt;/b&gt;</description>"
+        "<link>https://example.com/release</link><pubDate>Mon, 06 Jan 2025 14:30:00 GMT</pubDate>"
+        "</item><item><pubDate>unknown</pubDate></item></channel></rss>",
+        '<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Results</title><summary>Growth</summary>'
+        '<link href="https://example.com/release"/><published>2025-01-06T14:30:00Z</published>'
+        '<updated>2025-01-06T14:31:00Z</updated></entry></feed>',
+    ):
+        provider = IssuerNews("AAPL", "https://example.com/feed")
+        provider.http.get = Mock(return_value=Mock(content=xml.encode()))
+        [row] = provider.fetch(AT - timedelta(days=1), AT + timedelta(days=1))
+        assert row.text.split() == ["Results", "Growth"]
+        assert row.source == "rss:example.com" and row.ticker == "AAPL"
+        assert row.published_at <= row.content_at < row.received_at
 
 
 def test_ml_purges_overlapping_training_labels(monkeypatch):

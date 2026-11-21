@@ -61,6 +61,7 @@ botfolio events replay --start 2025-01-01T00:00:00Z --train-end 2025-06-30T23:59
   --validation-end 2025-09-30T23:59:59Z --end 2026-01-01T00:00:00Z \
   --experiment frozen-v1 --run-id events-v1 --output event-research.json
 botfolio events report
+botfolio events decision-stats
 botfolio dashboard
 ```
 
@@ -100,6 +101,22 @@ a changed configuration is rejected. Use a NEW id for every prompt/model/config
 experiment; do not silently mix versions. Requests and responses are immutable. Input-token cost
 is null unless a documented rate and token usage are available; output billing and network retry
 charges are not estimated. No vendor calls were made during validation.
+
+Cloudflare Clairic uses its typed-field interface. Set `EVENT_AI_PROVIDER=clairic`,
+`EVENT_AI_MODEL=clairic` and
+`EVENT_AI_URL=https://api.cloudflare.com/client/v4/accounts/ACCOUNT/ai/run/@cf/cloudflare/clairic`
+with a Cloudflare API key in `EVENT_AI_KEY`. Set `EVENT_AI_EXPERIMENT` to a new name when using
+the systemd service. An unanswered field or an excerpt that cannot be found verbatim in the
+article results in WAIT. Paper entry requires an explicit BUY or SELL as well as the existing checks.
+
+The watcher also reads Apple Newsroom and NVIDIA press-release feeds when AAPL and NVDA appear in
+the watchlist. It archives their published headlines and summaries for analysis. Issuer feed
+articles are research-only, and issuer feed errors do not stop Alpaca paper entries.
+
+`events decision-stats` and **News & AI** show saved decision counts by experiment, model and
+source, with action and direction counts, provider failures, mean latency and known token usage
+and cost. A decision is counted per ticker and article revision, so one story can contribute
+multiple records. These statistics describe the model's output and service usage.
 
 ## Replay and scientific controls
 

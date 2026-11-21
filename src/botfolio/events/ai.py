@@ -19,6 +19,15 @@ market/sector returns and related events; missing context increases uncertainty.
 is insufficient or already priced in. Sentiment is not profitability. confidence must be null.
 key_evidence must contain exact excerpts from event.text. Return one JSON decision matching schema."""
 
+CLAIRIC_INSTRUCTIONS = {
+    "recommended_action": "Choose a research action from the evidence, even if the article makes no recommendation. "
+                          "Use BUY or SELL only for a well-supported material directional hypothesis. "
+                          "Choose WAIT when evidence is insufficient.",
+    "expectations_surprise": "Compare against documented prior expectations. Select unknown if they are missing.",
+    "evidence": "Extract one verbatim excerpt from event text supporting a directional assessment. "
+                "Return null if the event does not support one.",
+}
+
 
 def identity(event):
     return dict(ticker=event.ticker, event_type=event.event_type,
@@ -38,8 +47,8 @@ class AI:
         self.url = os.getenv("EVENT_AI_URL", "")  # full endpoint; no guessed endpoints or provider routing
         self.key = os.getenv("EVENT_AI_KEY", "")
         self.timeout = float(os.getenv("EVENT_AI_TIMEOUT", "30"))
-        if self.provider not in {"disabled", "chat", "systemone"}:
-            raise ValueError("EVENT_AI_PROVIDER must be disabled, chat or systemone")
+        if self.provider not in {"disabled", "chat", "systemone", "clairic"}:
+            raise ValueError("EVENT_AI_PROVIDER must be disabled, chat, systemone or clairic")
         if self.provider != "disabled" and (not self.url.startswith("https://") or not self.key):
             raise ValueError("AI requires an HTTPS endpoint and EVENT_AI_KEY")
 
@@ -52,12 +61,19 @@ class AI:
             request = dict(model=self.model, temperature=0, messages=[
                 {"role": "system", "content": POLICY + json.dumps(Decision.model_json_schema())},
                 {"role": "user", "content": json.dumps(state)}], response_format={"type": "json_object"})
-        else:
+        elif self.provider == "systemone":
             fields = {key: value["enum"] for key, value in Decision.model_json_schema()["properties"].items()
                       if "enum" in value}
             request = dict(model=self.model, state=state, questions={key: dict(type="choice",
                 instructions=f"Evaluate {key}. Use unknown/WAIT when unsupported.",
                 criteria={option: option for option in options}) for key, options in fields.items()})
+        else:
+            fields = {key: dict(type="enum", enum=value["enum"],
+                       instructions=CLAIRIC_INSTRUCTIONS.get(
+                           key, f"Assess {key} using the policy and event. Abstain if unsupported."))
+                      for key, value in Decision.model_json_schema()["properties"].items() if "enum" in value}
+            fields["evidence"] = dict(type="text", instructions=CLAIRIC_INSTRUCTIONS["evidence"])
+            request = dict(model=self.model, state=json.dumps(state, ensure_ascii=False), fields=fields)
         # A failed or malformed response abstains; retries occur on the next event, avoiding unbounded billing.
         self.last_request = request
         response = requests.post(self.url, headers={"Authorization": "Bearer " + self.key},
@@ -68,21 +84,41 @@ class AI:
         self.last_response = raw
         if self.provider == "chat":
             decision = Decision.model_validate_json(raw["choices"][0]["message"]["content"])
-        else:
+        elif self.provider == "systemone":
             answers = raw.get("result", raw)["answers"]
             values = {key: answers[key]["choice"] for key in request["questions"]}
             decision = Decision(**identity(event), **values,
                 reasoning="Typed classifier output; no generated explanation is available.",
                 key_evidence=[event.text], risk_factors=["Uncalibrated classification; full input is evidence."])
+        else:
+            result = raw.get("result", raw)
+            answers = result["answers"]
+            fields = request["fields"]
+            if result.get("truncated") or any(
+                answers[key].get("valid") is False or answers[key].get("complete") is False for key in fields
+            ):
+                raise ValueError("Incomplete Clairic response")
+            values = {key: answers[key]["value"] for key in fields if key != "evidence"}
+            if any(value is None for value in values.values()):
+                return abstain(event, "Clairic left a decision field unanswered"), request, raw
+            evidence = answers["evidence"]["value"]
+            if not evidence or evidence not in event.text:
+                return abstain(event, "Clairic found no verifiable directional evidence"), request, raw
+            decision = Decision(**identity(event), **values, key_evidence=[evidence],
+                reasoning="Clairic classified the event using the quoted evidence.",
+                risk_factors=["Uncalibrated classification."])
         decision.validate_event(event)
         return decision, request, raw
 
 
 def analyze(store: EventStore, event: Event, experiment: str, ai: AI, context: dict):
     endpoint = getattr(ai, "url", "")
-    store.freeze_experiment(experiment, dict(provider=ai.provider, model=ai.model,
+    config = dict(provider=ai.provider, model=ai.model,
         endpoint=endpoint if isinstance(endpoint, str) else "", policy=POLICY,
-        schema=Decision.model_json_schema()))
+        schema=Decision.model_json_schema())
+    if ai.provider == "clairic":
+        config["field_instructions"] = CLAIRIC_INSTRUCTIONS
+    store.freeze_experiment(experiment, config)
     existing = store.decision(event.key, experiment)
     if existing:
         return existing
