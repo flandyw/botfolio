@@ -272,7 +272,7 @@ function Models({ usage, onSaved }: { usage: Usage; onSaved: () => void }) {
         <label className="grid gap-2">
           <span className="text-dim">
             Vercel spend per month: <span className="num text-ink">{usd(monthly)}</span>
-            {monthly > 10 && " (above the $10 free credit, so the rest is billed)"}
+            {monthly > 5 && " (above the $5 free credit, so the rest is billed)"}
           </span>
           <input
             type="range"
