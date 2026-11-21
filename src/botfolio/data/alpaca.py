@@ -118,6 +118,11 @@ class AlpacaClient:
             df = df.drop_duplicates(["symbol", "ts"]).sort_values(["ts", "symbol"]).reset_index(drop=True)
         return df
 
+    def get_latest_quotes(self, symbols: list[str], feed: str = "iex") -> dict[str, dict[str, Any]]:
+        data = self._request("GET", f"{MARKET_DATA_URL}/v2/stocks/quotes/latest",
+                             params={"symbols": ",".join(symbols), "feed": feed}) or {}
+        return data.get("quotes") or {}
+
     def get_paper_account(self) -> dict[str, Any]:
         url = f"{PAPER_TRADING_URL}/v2/account"
         assert_paper_url(url)

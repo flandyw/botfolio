@@ -96,14 +96,22 @@ def test_paper_control_room_is_safe_by_default(app_env, monkeypatch, tmp_path):
 def test_watchlist_validation_and_save(app_env):
     app = AppTest.from_file(APP).run()
     app.radio[0].set_value("Paper trading").run()
-    next(x for x in app.text_input if x.label == "News watchlist").set_value("AAPL, MSFT, aapl")
+    cfg = load_config()
+    assert len(cfg.symbols) > 100 and set(cfg.etfs) <= set(cfg.symbols)
+    box = lambda: next(x for x in app.text_area if x.label.startswith("Watchlist"))  # noqa: E731
+    assert box().value == ", ".join(cfg.symbols)
+    box().set_value("AAPL, MSFT, aapl")
     button(app, "Save watchlist").click().run()
-    storage = Storage(load_config().db_path)
-    assert storage.get("event-watchlist") == ["AAPL", "MSFT"]
-    next(x for x in app.text_input if x.label == "News watchlist").set_value("bad/ticker")
+    storage = Storage(cfg.db_path)
+    assert storage.get("watchlist") == ["AAPL", "MSFT"]
+    box().set_value("bad/ticker")
     button(app, "Save watchlist").click().run()
     assert app.error
-    assert storage.get("event-watchlist") == ["AAPL", "MSFT"]
+    assert storage.get("watchlist") == ["AAPL", "MSFT"]
+    large = [f"T{i}" for i in range(150)]
+    box().set_value(", ".join(large))
+    button(app, "Save watchlist").click().run()
+    assert not app.error and storage.get("watchlist") == large
     app_env.assert_not_called()
 
 

@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from botfolio.config import AppConfig
+from botfolio.config import AppConfig, watchlist
 from botfolio.storage import Storage
 
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
@@ -26,7 +26,7 @@ def create_app(cfg: AppConfig) -> Starlette:
             storage.close()
 
     async def config(_):
-        return JSONResponse({"symbols": storage.get("event-watchlist") or cfg.symbols, "feed": cfg.data.feed})
+        return JSONResponse({"symbols": watchlist(storage, cfg), "feed": cfg.data.feed})
 
     async def live(_):
         heartbeat = storage.get("event-heartbeat")
@@ -41,6 +41,7 @@ def create_app(cfg: AppConfig) -> Starlette:
             "enabled": state.get("enabled", False),
             "armed": bool(storage.get("event-paper-armed")),
             "open_intents": state.get("open_intents"),
+            "strategies": storage.get("strategy-status") or {},
         })
 
     routes = [Route("/api/config", config), Route("/api/live", live)]

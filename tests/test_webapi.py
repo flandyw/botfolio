@@ -31,7 +31,10 @@ def test_paper_api_uses_worker_state_and_saved_watchlist(tmp_path):
     assert json.loads(request(app, "/api/config")[1])["symbols"] == cfg.symbols
     assert json.loads(request(app, "/api/live")[1])["heartbeat"] is None
     now = datetime.now(UTC).isoformat()
-    storage.put("event-watchlist", ["AAPL"])
+    storage.put("event-watchlist", ["AAPL"])  # A list saved before the watchlist grew extends the default.
+    assert json.loads(request(app, "/api/config")[1])["symbols"] == [*cfg.symbols, "AAPL"]
+    storage.put("watchlist", ["AAPL"])
+    storage.put("strategy-status", {"momentum": {"note": "2 breakouts"}})
     storage.put("event-heartbeat", now)
     storage.put("event-paper-armed", True)
     storage.put("event-execution-state", {
@@ -43,6 +46,7 @@ def test_paper_api_uses_worker_state_and_saved_watchlist(tmp_path):
     state = json.loads(body)
     assert state["heartbeat"] == now
     assert state["phase"] == "ready"
+    assert state["strategies"]["momentum"]["note"] == "2 breakouts"
     assert state["armed"] is True
     assert state["open_intents"] == 2
     assert request(app, "/api/live", "POST")[0] == 405
