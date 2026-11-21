@@ -16,7 +16,7 @@ from botfolio.data.loader import load_history
 from botfolio.events.ai import AI, analyze
 from botfolio.events.models import Event
 from botfolio.events.paper import PaperExecutor, configured, event_is_fresh
-from botfolio.events.providers import AlpacaNews, SECFilings
+from botfolio.events.providers import ISSUER_FEEDS, AlpacaNews, IssuerNews, SECFilings
 from botfolio.events.research import market_context, replay
 from botfolio.events.store import EventStore
 from botfolio.storage import Storage
@@ -39,6 +39,8 @@ def command(cfg, args):
         print(json.dumps({"inserted": sum(store.add(e) for e in events), "rows": len(events)}))
     elif args.event_cmd == "report":
         print(store.reports().to_json(orient="records"))
+    elif args.event_cmd == "decision-stats":
+        print(store.decision_stats().to_json(orient="records", indent=2))
     elif args.event_cmd == "ml":
         import pandas as pd
 
@@ -119,6 +121,7 @@ async def watch(cfg, store, experiment, once=False):
     companies = json.loads(os.getenv("SEC_COMPANIES", "{}"))
     if companies:
         providers.append(SECFilings(companies, os.environ["SEC_USER_AGENT"]))
+    issuer_feeds = [IssuerNews(ticker, url) for ticker, url in ISSUER_FEEDS.items()]
     ai = AI()
     paper = PaperExecutor(AlpacaClient(creds, timeout=5, max_retries=1), store,
                           int(os.getenv("EVENT_HOLD_MINUTES", "15")))
@@ -131,19 +134,23 @@ async def watch(cfg, store, experiment, once=False):
             try:
                 watchlist = store.storage.get("event-watchlist") or cfg.symbols
                 providers[0].symbols = watchlist
-                results = await asyncio.gather(*(p.poll(now-timedelta(days=1), now) for p in providers),
+                active_providers = providers + [p for p in issuer_feeds if p.ticker in watchlist]
+                results = await asyncio.gather(*(p.poll(now-timedelta(days=1), now) for p in active_providers),
                                                return_exceptions=True)
-                failures = 0
-                for result in results:
+                failures = issuer_failures = 0
+                for provider, result in zip(active_providers, results, strict=True):
                     if isinstance(result, BaseException):
-                        failures += 1
-                        log.error("event provider failed", extra={"error": str(result)})
+                        if isinstance(provider, IssuerNews):
+                            issuer_failures += 1
+                        else:
+                            failures += 1
+                        log.error("event provider failed", extra={"provider": type(provider).__name__, "error": str(result)})
                         continue
                     for event in result:
                         store.add(event)
                 events = store.events()
                 store.storage.put("event-data-status", dict(at=datetime.now(UTC).isoformat(),
-                    provider_failures=failures,
+                    provider_failures=failures, issuer_feed_failures=issuer_failures,
                     latest_content=max((e.content_at for e in events), default=None).isoformat() if events else None))
                 for event in sorted(events, key=lambda e: e.content_at, reverse=True):
                     now = datetime.now(UTC)
@@ -158,7 +165,9 @@ async def watch(cfg, store, experiment, once=False):
                         context = market_context(frame_to_bars(bars_df, get_calendar()), event, event.received_at)
                         decision = await asyncio.to_thread(analyze, store, event, experiment, ai, context)
                     state = store.storage.get("event-execution-state") or {}
-                    if configured() and state.get("phase") == "ready" and not failures:
+                    if (configured() and state.get("phase") == "ready" and not failures
+                        and not event.source.startswith("rss:")
+                        and (ai.provider != "clairic" or decision[0].recommended_action in {"BUY", "SELL"})):
                         data = await asyncio.to_thread(client._request, "GET",
                             f"https://data.alpaca.markets/v2/stocks/{event.ticker}/quotes/latest",
                             params={"feed": cfg.data.feed})
@@ -182,6 +191,7 @@ def parser(sub):
     imp = commands.add_parser("import", help="import provenance-checked JSONL snapshots")
     imp.add_argument("path")
     commands.add_parser("report")
+    commands.add_parser("decision-stats", help="summarize saved AI decisions by experiment, model and source")
     watch_parser = commands.add_parser("watch")
     watch_parser.add_argument("--experiment", required=True)
     watch_parser.add_argument("--once", action="store_true")

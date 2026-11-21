@@ -87,13 +87,21 @@ def news_age(events, now=None):
 
 def collect_news(cfg, store):
     from botfolio.data.alpaca import AlpacaClient
-    from botfolio.events.providers import AlpacaNews
+    from botfolio.events.providers import ISSUER_FEEDS, AlpacaNews, IssuerNews
     from botfolio.safety import check_environment
 
     check_environment()
     client = AlpacaClient(load_credentials(), timeout=15, max_retries=2)
     now = datetime.now(UTC)
-    events = AlpacaNews(client, store.storage.get("event-watchlist") or cfg.symbols).fetch(now - timedelta(days=1), now)
+    watchlist = store.storage.get("event-watchlist") or cfg.symbols
+    start = now - timedelta(days=1)
+    events = AlpacaNews(client, watchlist).fetch(start, now)
+    for ticker, url in ISSUER_FEEDS.items():
+        if ticker in watchlist:
+            try:
+                events.extend(IssuerNews(ticker, url).fetch(start, now))
+            except Exception:
+                log.exception("issuer news collection failed", extra={"ticker": ticker})
     return sum(store.add(event) for event in events)
 
 
@@ -209,11 +217,16 @@ def render_news(store):
         return
     tickers = sorted({e.ticker for e in events})
     ticker = st.selectbox("Company or fund", ["All"] + tickers)
-    experiment = st.selectbox("AI assessment version", ["Latest saved assessment"] +
-        sorted(store.audit().experiment.unique()), help="Different versions may use different models or prompts. They are separate experiments.")
     audit = store.audit()
+    experiment = st.selectbox("AI assessment version", ["Latest saved assessment"] +
+        sorted(audit.experiment.unique()), help="Different versions may use different models or prompts. They are separate experiments.")
+    stats = store.decision_stats()
     if experiment != "Latest saved assessment":
         audit = audit[audit.experiment == experiment]
+        stats = stats[stats.experiment == experiment]
+    if not stats.empty:
+        with st.expander("Decision statistics by experiment, model and news source"):
+            st.dataframe(stats, hide_index=True)
     latest = audit.sort_values("completed_at").drop_duplicates("event_key", keep="last").set_index("event_key")
     shown = [e for e in sorted(events, key=lambda e: e.content_at, reverse=True) if ticker == "All" or e.ticker == ticker]
     age = news_age(shown)
@@ -389,6 +402,8 @@ def render_paper(cfg, storage):
         st.warning("No current news is available. Old articles cannot trigger new entries, even when paper trading is enabled.")
     if data.get("provider_failures"):
         st.error("A data provider failed its last check. Entries are blocked for that collection cycle.")
+    if data.get("issuer_feed_failures"):
+        st.warning("One or more issuer news feeds failed their last check.")
     if state.get("message"):
         st.error(state["message"])
     if not configured():

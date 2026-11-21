@@ -4,12 +4,20 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
+from urllib.parse import urlsplit
+from xml.etree import ElementTree
 
 import requests
 
 from botfolio.data.alpaca import AlpacaClient
 from botfolio.events.models import Event
+
+ISSUER_FEEDS = {
+    "AAPL": "https://www.apple.com/newsroom/rss-feed.rss",
+    "NVDA": "https://nvidianews.nvidia.com/cats/press_release.xml",
+}
 
 
 class Text(HTMLParser):
@@ -72,18 +80,63 @@ class AlpacaNews:
             data = self.client._request("GET", "https://data.alpaca.markets/v1beta1/news", params=params)
             received = datetime.now(UTC)
             for article in data.get("news", []):
+                text = plain(" ".join(article.get(field) or "" for field in ("headline", "content", "summary")))
+                if not text.strip():
+                    continue
                 for ticker in sorted(set(article["symbols"]) & set(self.symbols)):
                     result.append(Event(source="alpaca:" + article.get("source", "unknown"),
                         source_id=str(article["id"]), ticker=ticker, event_type="news",
                         published_at=article["created_at"], content_at=article["updated_at"],
                         received_at=received, source_url=article["url"],
-                        text=plain(article["headline"] + " " + article.get("content", "") + " "
-                                   + article.get("summary", ""))))
+                        text=text))
             token = data.get("next_page_token")
             if not token:
                 return result
             params["page_token"] = token
             time.sleep(0.35)
+
+
+class IssuerNews:
+    def __init__(self, ticker, url):
+        self.ticker, self.url = ticker, url
+        self.http = HTTP()
+
+    async def poll(self, start, end):
+        return await asyncio.to_thread(self.fetch, start, end)
+
+    def fetch(self, start, end):
+        root = ElementTree.fromstring(self.http.get(self.url).content)
+        received = datetime.now(UTC)
+        atom = "{http://www.w3.org/2005/Atom}"
+        result = []
+        for item in root.findall("./channel/item") + root.findall(atom + "entry"):
+            if item.tag == "item":
+                parse_date = parsedate_to_datetime
+                published_at = updated_at = item.findtext("pubDate", "")
+                link = item.findtext("link", "").strip()
+                headline, description = item.findtext("title", ""), item.findtext("description", "")
+            else:
+                parse_date = datetime.fromisoformat
+                updated_at = item.findtext(atom + "updated", "")
+                published_at = item.findtext(atom + "published") or updated_at
+                link = next((tag.get("href", "") for tag in item.findall(atom + "link")
+                             if tag.get("rel", "alternate") == "alternate"), "")
+                headline = item.findtext(atom + "title", "")
+                description = item.findtext(atom + "summary", "")
+            try:
+                published = parse_date(published_at)
+                updated = parse_date(updated_at or published_at)
+            except ValueError:
+                continue
+            text = plain(f"{headline} {description}").strip()
+            if (published.utcoffset() is None or updated.utcoffset() is None
+                or not published <= updated <= received or not start <= updated <= end
+                or not text or len(text) > 200_000 or not link.startswith("https://")):
+                continue
+            result.append(Event(source="rss:" + urlsplit(self.url).netloc, source_id=link,
+                ticker=self.ticker, event_type="news", published_at=published, content_at=updated,
+                received_at=received, source_url=link, text=text))
+        return result
 
 
 class SECFilings:
