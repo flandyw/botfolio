@@ -29,7 +29,7 @@ export function friendly(name: string): string {
 }
 
 /** Distinguishable series colours, stable for a given ordering of names. */
-const PALETTE = [
+export const PALETTE = [
   "#4f8ff7",
   "#f5a524",
   "#17c964",
@@ -78,3 +78,7 @@ export const etTime = (t: number, withTime = true) =>
     day: "numeric",
     ...(withTime ? { hour: "2-digit", minute: "2-digit", hour12: false } : {}),
   });
+
+export const money = usd;
+export const num = fmt;
+export const fmtTime = etTime;
