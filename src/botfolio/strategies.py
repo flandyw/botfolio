@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 SLOT = timedelta(minutes=30)
 FINAL = {"submitted", "duplicate event", "broker rejected entry; inspect journal"}  # never retried the same day
 # Answers about one symbol; any other refusal (paused, halted, full, closed) applies to every signal.
+OVERNIGHT = {"etf_trend", "etf_rotation"}  # strategies whose positions the parked cash makes room for
 PER_SYMBOL = FINAL | {"symbol occupied", "stale/invalid/illiquid quote", "size below one share or invalid stop"}
 
 
@@ -94,6 +95,28 @@ def trend_states(daily: pd.DataFrame, sma_days: int, band_pct: float) -> dict[st
     return out
 
 
+def rotation_members(daily: pd.DataFrame, held: set[str], top: int, keep: int, sma_days: int) -> list[str]:
+    """The ETFs to hold: the `top` by momentum, keeping a holding until it leaves the top `keep`.
+
+    Momentum is the average of the 1, 3, 6 and 12-month returns. An ETF qualifies only with positive
+    momentum and a close above its moving average, so fewer than `top` are held in a weak market.
+    """
+    scores, eligible = {}, set()
+    for symbol, bars in daily.sort_values("ts").groupby("symbol"):
+        closes = bars["close"].to_numpy()
+        if len(closes) < max(253, sma_days):
+            continue
+        scores[symbol] = sum(closes[-1] / closes[-1 - days] - 1 for days in (21, 63, 126, 252)) / 4
+        if scores[symbol] > 0 and closes[-1] > closes[-sma_days:].mean():
+            eligible.add(symbol)
+    ranked = sorted(scores, key=scores.get, reverse=True)
+    members = [symbol for symbol in ranked[:keep] if symbol in held and symbol in eligible]
+    for symbol in ranked[:top]:
+        if len(members) < top and symbol in eligible and symbol not in members:
+            members.append(symbol)
+    return members
+
+
 class StrategyRunner:
     def __init__(self, cfg, client, paper, storage):
         self.cfg, self.client, self.paper, self.storage = cfg, client, paper, storage
@@ -110,8 +133,12 @@ class StrategyRunner:
         phase = (self.storage.get("event-execution-state") or {}).get("phase")
         if self._day != ny_date(now):
             self._day, self._done, self._slot, self._profile, self._trend = ny_date(now), set(), None, None, None
-        for name, enabled, step in (("etf_trend", strategies.etf_trend.enabled, self._etf_trend),
-                                    ("momentum", strategies.momentum.enabled, self._momentum)):
+            self._daily = self._rotation = None
+        # Rotation runs first so the trend strategy knows which ETFs it has handed over; parked cash runs last.
+        for name, enabled, step in (("etf_rotation", strategies.etf_rotation.enabled, self._etf_rotation),
+                                    ("etf_trend", strategies.etf_trend.enabled, self._etf_trend),
+                                    ("momentum", strategies.momentum.enabled, self._momentum),
+                                    ("cash_park", strategies.cash_park.enabled, self._cash_park)):
             if not enabled:
                 note = "disabled in config"
             elif not session:
@@ -184,17 +211,51 @@ class StrategyRunner:
         today = self.client.get_bars(symbols, session.open, now, "30Min", self.cfg.data.feed, "split")
         return momentum_states(self._profile[1], today, now, self.calendar)
 
+    def _daily_bars(self, etfs):
+        """Completed daily bars for the ETFs, fetched once a day and shared by the trend and rotation strategies."""
+        if self._daily is None or self._daily[0] != etfs:
+            strategies = self.cfg.strategies
+            days = strategies.etf_trend.sma_days
+            if strategies.etf_rotation.enabled:
+                days = max(days, strategies.etf_rotation.sma_days, 253)
+            end = pd.Timestamp(self._day, tz="America/New_York")
+            daily = self.client.get_bars(etfs, (end - timedelta(days=int(days * 1.5) + 30)).to_pydatetime(),
+                                         end.to_pydatetime(), "1Day", self.cfg.data.feed, "all")
+            self._daily = (etfs, daily[daily["ts"] < end])
+        return self._daily[1]
+
+    def _etf_rotation(self, now, session, symbols):
+        cfg = self.cfg.strategies.etf_rotation
+        etfs = [symbol for symbol in symbols if symbol in set(self.cfg.etfs)]
+        if now - session.open < timedelta(minutes=5):
+            return "waiting for opening quotes to settle"
+        held = {intent["symbol"] for intent in self.paper.open_intents("etf_rotation")}
+        if self._rotation is None or self._rotation[0] != etfs:
+            members = rotation_members(self._daily_bars(etfs), held, cfg.top, cfg.keep, cfg.sma_days) if etfs else []
+            self._rotation = (etfs, members)
+        members = self._rotation[1]
+        for symbol in held.difference(members):
+            self.paper.request_exit("etf_rotation", symbol, "fell out of the momentum ranking")
+        wanted = [symbol for symbol in members if symbol not in held]
+        for symbol in wanted:  # the trend strategy sells its smaller position first; the buy follows once it is flat
+            self.paper.request_exit("etf_trend", symbol, "handed to the rotation strategy")
+        taken = {intent["symbol"] for intent in self.paper.open_intents()}
+        signals = [Signal("etf_rotation", f"etf_rotation-{symbol}-{self._day}", symbol, 1, intraday=False,
+                          fractional=True)
+                   for symbol in wanted if symbol not in taken and f"etf_rotation-{symbol}-{self._day}" not in self._done]
+        results = self._send("etf_rotation", signals)
+        return (f"top {cfg.top} by momentum: {', '.join(members) or 'none qualify'}; {len(held)} held, "
+                f"{sum(r == 'submitted' for r in results.values())} orders submitted")
+
     def _etf_trend(self, now, session, symbols):
         cfg = self.cfg.strategies.etf_trend
         etfs = [symbol for symbol in symbols if symbol in set(self.cfg.etfs)]
         if now - session.open < timedelta(minutes=5):
             return "waiting for opening quotes to settle"
         if self._trend is None or self._trend[0] != etfs:
-            end = pd.Timestamp(self._day, tz="America/New_York")  # completed daily bars only
-            daily = self.client.get_bars(etfs, (end - timedelta(days=int(cfg.sma_days * 1.5) + 30)).to_pydatetime(),
-                                         end.to_pydatetime(), "1Day", self.cfg.data.feed, "all") if etfs else pd.DataFrame()
-            self._trend = (etfs, trend_states(daily[daily["ts"] < end], cfg.sma_days, cfg.band_pct) if etfs else {})
+            self._trend = (etfs, trend_states(self._daily_bars(etfs), cfg.sma_days, cfg.band_pct) if etfs else {})
         states = self._trend[1]
+        rotation = set(self._rotation[1]) if self.cfg.strategies.etf_rotation.enabled and self._rotation else set()
         held = {intent["symbol"] for intent in self.paper.open_intents("etf_trend")}
         for symbol in held:
             if symbol not in etfs:
@@ -202,12 +263,45 @@ class StrategyRunner:
             elif states.get(symbol) == "flat":
                 self.paper.request_exit("etf_trend", symbol, f"closed below the {cfg.sma_days}-day average")
         signals = [Signal("etf_trend", f"etf_trend-{symbol}-{self._day}", symbol, 1, intraday=False, fractional=True)
-                   for symbol in etfs if states.get(symbol) == "long" and symbol not in held
+                   for symbol in etfs if states.get(symbol) == "long" and symbol not in held | rotation
                    and f"etf_trend-{symbol}-{self._day}" not in self._done]
         results = self._send("etf_trend", signals)
         above = sum(state == "long" for state in states.values())
         return (f"{above} of {len(states)} ETFs above the {cfg.sma_days}-day average; {len(held)} held, "
                 f"{sum(r == 'submitted' for r in results.values())} orders submitted")
+
+
+    def _cash_park(self, now, session, symbols):
+        cfg = self.cfg.strategies.cash_park
+        if cfg.symbol in symbols:
+            return f"{cfg.symbol} is on the watchlist, so it cannot also hold the idle cash"
+        if now - session.open < timedelta(minutes=30):
+            return "waiting for the other strategies' opening orders"
+        equity = float(self.paper.client.get_paper_account()["equity"])
+        if equity <= 0:
+            return "no equity to park"
+        values = {p["symbol"]: abs(float(p["market_value"])) for p in self.paper.request("GET", "positions")}
+
+        def pct(intents):
+            return 100 * sum(values.get(i["symbol"], i["qty"] * i["limit"]) for i in intents) / equity
+
+        held = self.paper.open_intents("cash_park")
+        parked = pct(held)
+        target = max(0.0, 100 - cfg.reserve_pct - pct(i for i in self.paper.open_intents()
+                                                      if i.get("strategy") in OVERNIGHT))
+        key = f"cash_park-{self._day}"
+        note = f"{parked:.0f}% of equity in {cfg.symbol}, target {target:.0f}%"
+        if held:
+            # The position is resized by selling it and buying the new size, at most once a day. Selling
+            # when it is too large is never deferred, so the overnight positions are not bought on margin.
+            if parked - target > cfg.band_pct or (target - parked > cfg.band_pct and key not in self._done):
+                self.paper.request_exit("cash_park", cfg.symbol, f"resizing to {target:.0f}% of equity")
+                note += "; resizing"
+        elif target >= cfg.band_pct and key not in self._done:
+            results = self._send("cash_park", [Signal("cash_park", key, cfg.symbol, 1, intraday=False,
+                                                      fractional=True, position_pct=target)])
+            note += f"; {results.get(key, 'no order')}"
+        return note
 
 
 async def strategy_loop(runner: StrategyRunner, once: bool = False):

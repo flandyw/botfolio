@@ -12,7 +12,7 @@ from botfolio.events.paper import TERMINAL, PaperExecutor, Signal
 from botfolio.events.store import EventStore
 from botfolio.safety import PAPER_TRADING_URL
 from botfolio.storage import Storage
-from botfolio.strategies import StrategyRunner, momentum_states, noise_profile, trend_states
+from botfolio.strategies import StrategyRunner, momentum_states, noise_profile, rotation_members, trend_states
 
 CAL = get_calendar("NASDAQ")
 DAY1 = CAL.session(datetime(2025, 1, 7).date())
@@ -72,7 +72,9 @@ class Broker:
                     leg["status"] = "new"
                 long = order["side"] == "buy"
                 self.positions[order["symbol"]] = dict(symbol=order["symbol"], side="long" if long else "short",
-                                                       qty=order["qty"] if long else "-" + order["qty"])
+                                                       qty=order["qty"] if long else "-" + order["qty"],
+                                                       market_value=str(float(order["qty"])
+                                                                        * float(order["limit_price"])))
 
 
 def quote(ask, at=None):
@@ -228,14 +230,25 @@ def test_pause_during_a_batch_stops_the_remaining_orders(paper):
     assert len(broker.posts) == 1
 
 
+def trending(end, gains, periods=260):
+    """Daily closes that rise steadily from 100 to 100 * (1 + gain) for each symbol."""
+    days = pd.date_range(end=pd.Timestamp(end.date(), tz="America/New_York") - timedelta(days=1), periods=periods)
+    rows = []
+    for symbol, gain in gains.items():
+        for i, day in enumerate(days):
+            close = 100 * (1 + gain) ** (i / (periods - 1))
+            rows.append((symbol, day.tz_convert("UTC"), close, close, close, close, 1e6))
+    return pd.DataFrame(rows, columns=BAR_COLUMNS)
+
+
 class Data:
     def __init__(self):
         self.daily, self.today, self.asks = {"SPY": (100, 110), "TLT": (100, 90)}, TODAY, {}
-        self.quoted_at = NOW
+        self.quoted_at, self.gains = NOW, None
 
     def get_bars(self, symbols, start, end, timeframe, feed, adjustment):
         if timeframe == "1Day":
-            frame = daily(end, self.daily)
+            frame = trending(end, self.gains) if self.gains else daily(end, self.daily)
         elif end <= DAY1.open or DAY1.close < end <= DAY2.open:
             frame = history()
         else:
@@ -308,8 +321,111 @@ def test_momentum_skips_symbols_held_by_another_strategy(paper):
 def test_runner_waits_for_market_and_execution_readiness(paper):
     runner = StrategyRunner(paper.cfg, Data(), paper, paper.store.storage)
     runner.clock = lambda: datetime(2025, 1, 4, 16, tzinfo=UTC)  # Saturday
+    for strategy in (paper.cfg.strategies.etf_rotation, paper.cfg.strategies.cash_park):
+        strategy.enabled = True
     assert {s["note"] for s in runner.run().values()} == {"market closed"}
     runner.clock = lambda: NOW
     paper.store.storage.put("event-execution-state", {"phase": "error"})
     assert {s["note"] for s in runner.run().values()} == {"paper execution not ready"}
     assert not paper.client.posts
+
+
+def test_rotation_ranks_by_momentum_and_keeps_holdings_inside_the_buffer():
+    frame = trending(NOW, {"A": .40, "B": .30, "C": .20, "D": .10, "E": -.10})
+    assert rotation_members(frame, set(), 2, 3, 200) == ["A", "B"]
+    # C is outside the top two but inside the top three, so it is kept and only one place is left to fill.
+    assert rotation_members(frame, {"C"}, 2, 3, 200) == ["C", "A"]
+    assert rotation_members(frame, {"D"}, 2, 3, 200) == ["A", "B"]  # D fell out of the top three
+    # Falling ETFs never qualify, however few others there are; a short history is left out altogether.
+    assert rotation_members(frame[frame["symbol"].isin(["D", "E"])], {"E"}, 2, 3, 200) == ["D"]
+    assert rotation_members(trending(NOW, {"A": .40}, periods=252), set(), 2, 3, 200) == []
+    # A strong year does not qualify an ETF that has since dropped below its average.
+    broken = frame[frame["symbol"] == "A"].copy()
+    broken.iloc[-1, broken.columns.get_loc("close")] = 115.0
+    assert rotation_members(broken, {"A"}, 2, 3, 200) == []
+
+
+def overnight(paper, data, **enabled):
+    """A runner with intraday momentum off and the named overnight strategies switched on."""
+    strategies = paper.cfg.strategies
+    strategies.momentum.enabled = False
+    for name, value in enabled.items():
+        for field, setting in dict(value, enabled=True).items():
+            setattr(getattr(strategies, name), field, setting)
+    paper.limits.update(paper.cfg.limits())
+    runner = StrategyRunner(paper.cfg, data, paper, paper.store.storage)
+    runner.clock = lambda: paper.client.now
+    return runner
+
+
+def settle(paper):
+    for _ in range(3):  # sell at the market, then confirm flat
+        paper.maintain(paper.client.now)
+
+
+def test_rotation_takes_its_etfs_from_the_trend_strategy_and_hands_them_back(paper):
+    broker, data = paper.client, Data()
+    data.gains = {"SPY": .30, "TLT": .10}
+    runner = overnight(paper, data, etf_rotation=dict(top=1, keep=1))
+
+    status = runner.run()
+    # SPY leads, so rotation holds it at 40% of equity and trend holds only TLT at its 25%.
+    assert [(o["symbol"], o["side"], round(float(o["qty"]) * float(o["limit_price"]), -2)) for o in broker.posts] == [
+        ("SPY", "buy", 4000), ("TLT", "buy", 2500)]
+    assert "SPY" in status["etf_rotation"]["note"]
+    broker.fill()
+    runner.run()
+    assert len(broker.posts) == 2
+    assert {i["symbol"]: i["strategy"] for i in paper.open_intents()} == {"SPY": "etf_rotation", "TLT": "etf_trend"}
+
+    # The next day TLT leads: each strategy sells, then buys the other ETF once the symbol is free.
+    broker.now = data.quoted_at = DAY2.open + timedelta(minutes=91)
+    data.gains = {"SPY": .10, "TLT": .50}
+    runner.run()
+    reasons = {i["symbol"]: i["exit_requested"] for i in paper.open_intents()}
+    assert "momentum ranking" in reasons["SPY"] and "handed to the rotation" in reasons["TLT"]
+    assert [(o["symbol"], o["side"], o["type"]) for o in broker.posts[2:]] == [
+        ("SPY", "sell", "market"), ("TLT", "sell", "market")]
+    settle(paper)
+    assert not paper.open_intents()
+    runner.run()
+    assert [(o["symbol"], o["side"], round(float(o["qty"]) * float(o["limit_price"]), -2))
+            for o in broker.posts[4:]] == [("TLT", "buy", 4000), ("SPY", "buy", 2500)]
+    assert {i["symbol"]: i["strategy"] for i in paper.open_intents()} == {"TLT": "etf_rotation", "SPY": "etf_trend"}
+
+
+def test_idle_cash_is_parked_and_resized_around_the_overnight_positions(paper):
+    broker, data = paper.client, Data()
+    runner = overnight(paper, data, cash_park={})
+
+    def parked():
+        return [round(float(o["qty"]) * float(o["limit_price"]), -2) for o in broker.posts
+                if o["symbol"] == "BOXX" and o["side"] == "buy"]
+
+    # Trend holds SPY at 25% of equity and 5% stays in cash, so 70% goes to the Treasury-bill ETF.
+    status = runner.run()
+    assert [o["symbol"] for o in broker.posts] == ["SPY", "BOXX"] and parked() == [7000]
+    assert "target 70%" in status["cash_park"]["note"]
+    broker.fill()
+    assert runner.run()["cash_park"]["note"] == "70% of equity in BOXX, target 70%"
+    assert len(broker.posts) == 2
+
+    # Another overnight position leaves the parked cash too large. It is sold at once, so the account
+    # does not borrow, and bought again at the smaller size on the next day.
+    paper.submit([Signal("etf_rotation", "etf_rotation-UP", "UP", 1, intraday=False, fractional=True)],
+                 {"UP": quote(100.0)}, NOW)
+    broker.fill()
+    assert "resizing" in runner.run()["cash_park"]["note"]
+    settle(paper)
+    assert (broker.posts[-1]["symbol"], broker.posts[-1]["side"], broker.posts[-1]["type"]) == ("BOXX", "sell", "market")
+    runner.run()
+    assert parked() == [7000] and {i["symbol"] for i in paper.open_intents()} == {"SPY", "UP"}
+    broker.now = data.quoted_at = DAY2.open + timedelta(minutes=91)
+    runner.run()
+    assert parked() == [7000, 6200]
+
+    # The parking ETF cannot also be a watchlist symbol, and nothing is parked before the opening orders.
+    broker.now = DAY2.open + timedelta(minutes=10)
+    assert "waiting" in StrategyRunner(paper.cfg, data, paper, paper.store.storage)._cash_park(
+        broker.now, CAL.session_for(broker.now), ["SPY"])
+    assert "on the watchlist" in runner._cash_park(broker.now, CAL.session_for(broker.now), ["SPY", "BOXX"])

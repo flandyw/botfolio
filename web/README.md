@@ -1,6 +1,6 @@
 # Web dashboard
 
-- **Desk**: the paper account, the three strategies with their last run and orders, positions and recent orders.
+- **Desk**: the paper account, the five strategies with their last run and orders, positions and recent orders.
 - **Markets**: the watchlist as a sortable table beside the chart. Filter it, click a row or use the arrow keys.
 - **News**: saved articles with the AI assessment of each.
 - **Control**: turn entries on or off, trigger the emergency stop, edit the watchlist and read the order journal.

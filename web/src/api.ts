@@ -68,7 +68,7 @@ export type AiUsage = {
   days: AiUsageDay[];
 };
 
-export type StrategyName = "news" | "momentum" | "etf_trend";
+export type StrategyName = "news" | "momentum" | "etf_trend" | "etf_rotation" | "cash_park";
 
 export type StrategyStatus = {
   at?: string;
@@ -83,6 +83,7 @@ export type StrategyConfig = {
   risk_pct?: number;
   allocation_pct?: number;
   sma_days?: number;
+  symbol?: string;
 };
 
 /** An order or position the worker is managing, and the strategy that owns it. */

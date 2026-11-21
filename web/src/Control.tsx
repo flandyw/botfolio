@@ -6,7 +6,13 @@ import { etDateTime, num } from "./format";
 import { Button, Message, Section, SymbolLink } from "./ui";
 import { useApi } from "./useApi";
 
-const STRATEGY: Record<string, string> = { news: "News + AI", momentum: "Momentum", etf_trend: "ETF trend" };
+const STRATEGY: Record<string, string> = {
+  news: "News + AI",
+  momentum: "Momentum",
+  etf_trend: "ETF trend",
+  etf_rotation: "ETF rotation",
+  cash_park: "Parked cash",
+};
 
 export function Control({
   live,
