@@ -190,6 +190,21 @@ def test_strategy_caps_and_definitive_rejections(paper):
     assert [i["symbol"] for i in paper.maintain(NOW)] == ["UP"]  # the rejected reservation is closed, not unknown
 
 
+def test_a_missing_reservation_does_not_hold_up_other_exits(paper):
+    broker = paper.client
+    quotes = {"UP": quote(101.5), "FLAT": quote(101.5)}
+    paper.submit([Signal("momentum", "momentum-UP", "UP", 1, stop=100.0)], quotes, NOW)
+    broker.fill()
+    paper.submit([Signal("momentum", "momentum-FLAT", "FLAT", 1, stop=100.0)], quotes, NOW)
+    del broker.orders["evt-momentum-FLAT"]  # the reservation never reached the broker
+    late = DAY1.close - timedelta(minutes=4)
+    for _ in range(2):  # cancel the stop, then close the position
+        with pytest.raises(RuntimeError, match="manual reconciliation"):
+            paper.maintain(late)
+    assert (broker.posts[-1]["symbol"], broker.posts[-1]["type"], broker.posts[-1]["side"]) == ("UP", "market", "sell")
+    assert "UP" not in broker.positions
+
+
 def test_paused_entries_reach_no_strategy(paper):
     paper.store.storage.put("event-paper-armed", False)
     signal = Signal("etf_trend", "etf_trend-SPY", "SPY", 1, intraday=False, fractional=True)

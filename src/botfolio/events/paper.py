@@ -115,7 +115,7 @@ class PaperExecutor:
         if not configured():
             raise RuntimeError("paper maintenance requires enabled exclusive-account mode")
         killed = Path(os.getenv("EVENT_KILL_FILE", "data/EVENT_KILL")).exists()
-        found = []
+        found, missing = [], False
         for key, intent in self.intents():
             if intent["state"] == "closed":
                 continue
@@ -125,7 +125,9 @@ class PaperExecutor:
                 order = self.find_order(intent["client_id"])
                 if order is None:
                     # A reservation may have reached the broker despite a timeout. Never guess/resubmit.
-                    raise RuntimeError("Reserved entry not found at broker; manual reconciliation required")
+                    # The other intents are still managed below, so their exits are not held up by it.
+                    missing = True
+                    continue
             found.append((key, intent, order))
         # Read positions after the orders, so a fill seen above is never missing from this snapshot.
         positions = {p["symbol"]: p for p in self.request("GET", "positions")} if found else {}
@@ -182,6 +184,8 @@ class PaperExecutor:
                                 p["symbol"] == intent["symbol"] for p in self.request("GET", "positions")):
                             raise RuntimeError("Exit terminated with residual position; manual reconciliation required")
             self.save(key, intent)
+        if missing:
+            raise RuntimeError("Reserved entry not found at broker; manual reconciliation required")
         return active
 
     def _blocked(self):
