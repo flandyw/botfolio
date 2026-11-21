@@ -132,7 +132,7 @@ def render_paper(cfg, storage):
     latest = data.get("latest_content")
     stale_news = not latest or now-datetime.fromisoformat(latest) > timedelta(minutes=5)
     if stale_news:
-        st.warning("No current news is available. Old articles cannot trigger new entries, even when paper trading is enabled.")
+        st.warning("No current news is available. Old articles cannot trigger news entries; momentum and ETF trend are unaffected.")
     if data.get("provider_failures"):
         st.error("A data provider failed its last check. Entries are blocked for that collection cycle.")
     if data.get("issuer_feed_failures"):
@@ -145,15 +145,17 @@ def render_paper(cfg, storage):
     with st.container(border=True):
         st.markdown("**Turn new paper trades on or off**")
         if configured() and armed:
-            idle = ([] if session else ["the market is closed"]) + (["there is no fresh news"] if stale_news else [])
             st.success("**Paper entries are ON.** The bot will place a paper trade when any strategy gives a valid signal "
-                       "during market hours." + (f" Right now it is waiting because {' and '.join(idle)}." if idle else ""))
+                       "during market hours." + ("" if session else " Right now it is waiting because the market is closed."))
         else:
             st.info("**Paper entries are OFF.** The bot will not open new trades.")
         dedicated = st.checkbox("I confirm this is a dedicated Alpaca paper account with no manual or other bot trading.")
         ready = [("Paper execution switched on by the app operator", configured()),
                  ("Background worker checked in within the last 20 seconds", healthy),
-                 ("AI news reader set up", ai_ready), ("Dedicated paper account confirmed (box above)", dedicated)]
+                 ("Dedicated paper account confirmed (box above)", dedicated)]
+        if strategies.news.enabled and not ai_ready:
+            st.caption("No AI news reader is set up, so the news strategy will not trade. "
+                       "Momentum and ETF trend do not need one.")
         if not all(ok for _, ok in ready):
             st.markdown("The **Enable** button unlocks when every item is ticked:\n\n" +
                         "\n".join(f"- {'✅' if ok else '❌'} {label}" for label, ok in ready))

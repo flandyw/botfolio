@@ -128,3 +128,18 @@ def test_paper_page_shows_when_entries_are_on(app_env, monkeypatch, tmp_path):
     button(app, "Pause new entries").click().run()
     assert any("Paper entries are OFF" in item.value for item in app.info)
     app_env.assert_not_called()
+
+
+def test_entries_can_be_armed_without_an_ai_provider(app_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("EVENT_PAPER_ENABLED", "true")
+    monkeypatch.setenv("EVENT_EXCLUSIVE_ACCOUNT", "true")
+    monkeypatch.setenv("EVENT_KILL_FILE", str(tmp_path/"KILL"))
+    storage = Storage(load_config().db_path)
+    storage.put("event-execution-state", {"at": datetime.now(UTC).isoformat(), "phase": "ready"})
+    app = AppTest.from_file(APP).run()
+    assert button(app, "Enable paper entries").disabled
+    assert any("Momentum and ETF trend do not need one" in item.value for item in app.caption)
+    app.checkbox[0].check().run()
+    button(app, "Enable paper entries").click().run()
+    assert storage.get("event-paper-armed") is True
+    app_env.assert_not_called()
