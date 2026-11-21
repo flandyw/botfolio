@@ -8,18 +8,53 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import requests
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from botfolio.config import AppConfig, watchlist
+from botfolio.events.ai import CLOUDFLARE_MODELS, FREE_NEURONS, budget, neurons_per_million
 from botfolio.events.paper import configured
 from botfolio.events.store import EventStore
 from botfolio.storage import Storage
 
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 MAX_WATCHLIST = 500
+NEURON_USD = 0.011 / 1000
+MAX_MONTHLY_USD = 50  # slider ceiling; a typo should not spend real money
+PROVIDER_FAILURE = "Provider failure or invalid structured output"
+_vercel_models: dict = {}
+_vercel_credits: dict = {}
+
+
+def vercel_credits() -> float | None:
+    """Remaining gateway credit in USD from /v1/credits, cached for five minutes; None when unknown."""
+    key = os.getenv("EVENT_AI_SECONDARY_KEY", "")
+    if key and _vercel_credits.get("at", 0) < datetime.now(UTC).timestamp() - 300:
+        try:
+            balance = requests.get("https://ai-gateway.vercel.sh/v1/credits", timeout=10,
+                                   headers={"Authorization": "Bearer " + key}).json()["balance"]
+            _vercel_credits.update(at=datetime.now(UTC).timestamp(), balance=float(balance))
+        except (requests.RequestException, ValueError, KeyError, TypeError):
+            pass
+    return _vercel_credits.get("balance")
+
+
+def vercel_models() -> list[str]:
+    """Gateway language models that accept a JSON response format, cached for an hour."""
+    if _vercel_models.get("at", 0) < datetime.now(UTC).timestamp() - 3600:
+        try:
+            data = requests.get("https://ai-gateway.vercel.sh/v1/models", timeout=10).json()["data"]
+            _vercel_models.update(at=datetime.now(UTC).timestamp(), ids=sorted(
+                m["id"] for m in data if m.get("type") == "language"
+                and "response_format" in m.get("supported_parameters", [])))
+        except (requests.RequestException, ValueError, KeyError, TypeError):
+            return _vercel_models.get("ids", [])
+    return _vercel_models["ids"]
+
+
 SYMBOL = re.compile(r"[A-Z][A-Z0-9.\-]{0,14}")
 
 
@@ -107,17 +142,45 @@ def create_app(cfg: AppConfig) -> Starlette:
         return denied(request) or JSONResponse(
             sorted(journal(), key=lambda row: row.get("opened") or "", reverse=True)[:200])
 
+    def matching(params, audit):
+        """Events passing the news page's filters (ticker, status, action, source, text, age), plus all tickers/sources."""
+        ticker, status = params.get("ticker", "").upper(), params.get("status", "")
+        action, source, text = params.get("action", ""), params.get("source", ""), params.get("q", "").lower().strip()
+        try:
+            since = datetime.now(UTC) - timedelta(hours=float(params["hours"])) if params.get("hours") else None
+        except ValueError:
+            since = None
+        everything = store.events()
+        actions = {k: json.loads(p)["recommended_action"] for k, p in zip(audit.index, audit.payload, strict=True)}
+
+        def keep(e):
+            return ((not ticker or e.ticker == ticker) and (not source or e.source.split(":")[0] == source)
+                    and (status != "assessed" or e.key in actions) and (status != "unassessed" or e.key not in actions)
+                    and (not action or actions.get(e.key) == action) and (not text or text in e.text.lower())
+                    and (not since or e.published_at >= since))
+        return [e for e in everything if keep(e)], everything
+
     async def news(request):
-        """Saved news, newest first, each with the latest AI assessment."""
+        """Saved news with the latest AI assessment; filtered and sorted by the query string."""
         if refused := denied(request):
             return refused
-        ticker = request.query_params.get("ticker", "").upper()
-        events = store.events()
-        tickers = sorted({event.ticker for event in events})
-        events = sorted((e for e in events if not ticker or e.ticker == ticker), key=lambda e: e.content_at, reverse=True)
+        q = request.query_params
+        with storage.tx() as conn:
+            queued = [r[0].removeprefix("news-assess:") for r in conn.execute(
+                "SELECT key FROM kv WHERE key LIKE 'news-assess:%'")]
         audit = store.audit().sort_values("completed_at").drop_duplicates("event_key", keep="last").set_index("event_key")
+        events, everything = matching(q, audit)
+        assessed_at = {k: t for k, t in zip(audit.index, audit.completed_at, strict=True)}
+        sort = q.get("sort", "published")
+        events.sort(key={"saved": lambda e: e.received_at, "ticker": lambda e: e.ticker,
+                         "assessed": lambda e: assessed_at.get(e.key, "")}.get(sort, lambda e: e.content_at),
+                    reverse=sort != "ticker")
+        try:
+            limit = min(max(int(q.get("limit", 50)), 1), 500)
+        except ValueError:
+            limit = 50
         items = []
-        for event in events[:50]:
+        for event in events[:limit]:
             record = audit.loc[event.key] if event.key in audit.index else None
             decision = json.loads(record.payload) if record is not None else None
             items.append({
@@ -127,10 +190,33 @@ def create_app(cfg: AppConfig) -> Starlette:
                 "decision": decision and {
                     "action": decision["recommended_action"], "reasoning": decision["reasoning"],
                     "evidence": decision["key_evidence"], "risks": decision["risk_factors"],
-                    "model": record.model, "experiment": record.experiment},
+                    "model": record.model, "experiment": record.experiment, "at": record.completed_at},
             })
-        archived = bool(events) and datetime.now(UTC) - events[0].content_at > timedelta(days=1)
-        return JSONResponse({"tickers": tickers, "total": len(events), "archived": archived, "items": items})
+        unassessed = sum(e.key not in audit.index for e in events)
+        newest = max((e.content_at for e in everything), default=None)
+        archived = newest is not None and datetime.now(UTC) - newest > timedelta(days=1)
+        return JSONResponse({"tickers": sorted({e.ticker for e in everything}),
+                             "sources": sorted({e.source.split(":")[0] for e in everything}),
+                             "total": len(events), "archived": archived, "queued": queued,
+                             "last_assessed": storage.get("news-assess-last"), "unassessed": unassessed, "items": items})
+
+    async def assess(request):
+        """Queue AI assessments for the worker: {"key": ...} for one article, or {"all": true, "filters": {...}} for
+        every unassessed article the news page is showing (at most 200 at a time). The worker does them a few per
+        cycle, without trading."""
+        if refused := denied(request, write=True):
+            return refused
+        try:
+            body = await request.json()
+            key, filters = body.get("key"), {str(k): str(v) for k, v in (body.get("filters") or {}).items()}
+        except (ValueError, AttributeError):
+            return JSONResponse({"error": "Bad request."}, 400)
+        audit = store.audit().drop_duplicates("event_key").set_index("event_key")
+        events, _ = matching(filters, audit)
+        keys = [e.key for e in events if e.key not in audit.index and (key == e.key if key else body.get("all") is True)][:200]
+        for k in keys:
+            storage.put("news-assess:" + k, True)
+        return JSONResponse({"queued": len(keys)})
 
     async def save_watchlist(request):
         if refused := denied(request, write=True):
@@ -176,9 +262,90 @@ def create_app(cfg: AppConfig) -> Starlette:
             return JSONResponse({"error": "Unknown action."}, 404)
         return JSONResponse({"armed": bool(storage.get("event-paper-armed")), "stopped": kill_file().exists()})
 
+    def ai_settings():
+        saved = storage.get("ai-settings") or {}
+        secondary = os.getenv("EVENT_AI_SECONDARY_PROVIDER", "disabled") == "chat"
+        return {
+            "primary_provider": os.getenv("EVENT_AI_PROVIDER", "disabled"),
+            "primary_model": saved.get("primary_model") or os.getenv("EVENT_AI_MODEL", "disabled"),
+            "secondary_ready": secondary and bool(os.getenv("EVENT_AI_SECONDARY_KEY")),
+            "secondary_model": saved.get("secondary_model") or os.getenv("EVENT_AI_SECONDARY_MODEL", ""),
+            "monthly_usd": float(saved.get("monthly_usd", os.getenv("EVENT_AI_MONTHLY_USD", "1"))),
+            "share": share if (share := saved.get("share", os.getenv("EVENT_AI_SECONDARY_SHARE") or "auto")) == "auto"
+            else float(share),
+        }
+
+    async def ai(request):
+        """GET: AI settings, model choices and daily usage (UTC days, last 14). PUT: save model/split choices."""
+        if refused := denied(request, write=request.method == "PUT"):
+            return refused
+        if request.method == "PUT":
+            try:
+                body = await request.json()
+                current = ai_settings()
+                primary = str(body.get("primary_model", current["primary_model"]))
+                secondary = str(body.get("secondary_model", current["secondary_model"]))
+                monthly = float(body.get("monthly_usd", current["monthly_usd"]))
+                share = body.get("share", current["share"])
+                share = share if share == "auto" else float(share)
+            except (ValueError, AttributeError, TypeError):
+                return JSONResponse({"error": "Bad request."}, 400)
+            if current["primary_provider"] == "clairic" and primary not in CLOUDFLARE_MODELS:
+                return JSONResponse({"error": "Unknown Cloudflare model."}, 400)
+            if secondary != current["secondary_model"] and secondary not in vercel_models():
+                return JSONResponse({"error": "That model is not on Vercel AI Gateway with JSON output."}, 400)
+            if not 0 <= monthly <= MAX_MONTHLY_USD:
+                return JSONResponse({"error": f"The Vercel budget must be $0–${MAX_MONTHLY_USD} a month."}, 400)
+            if share != "auto" and not 0 <= share <= 1:
+                return JSONResponse({"error": "The split must be between 0% and 100%."}, 400)
+            storage.put("ai-settings", {"primary_model": primary, "secondary_model": secondary, "share": share,
+                                        "monthly_usd": monthly})
+        since = (datetime.now(UTC) - timedelta(days=13)).date().isoformat()
+        with storage.tx() as conn:
+            rows = conn.execute("SELECT model, payload, response, latency, completed_at FROM event_decisions "
+                                "WHERE completed_at >= ? ORDER BY completed_at", (since,)).fetchall()
+        days: dict = {}
+        for model, payload, response, latency, completed_at in rows:
+            day = completed_at[:10]
+            try:
+                raw = json.loads(response)
+                usage = raw.get("usage") or (raw.get("result") or {}).get("usage") or {}
+            except (ValueError, AttributeError):
+                usage = {}
+            provider, _, name = model.partition(":")
+            row = days.setdefault(day, {"day": day, "neurons": 0.0, "cf_usd": 0.0, "vercel_usd": 0.0, "models": {}})
+            m = row["models"].setdefault(model, {"calls": 0, "failures": 0, "input": 0, "output": 0, "latency": 0.0})
+            m["calls"] += 1
+            m["failures"] += json.loads(payload).get("reasoning") == PROVIDER_FAILURE
+            m["input"] += usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+            m["output"] += usage.get("output_tokens") or usage.get("completion_tokens") or 0
+            m["latency"] += latency
+            rate = neurons_per_million(name, day) if provider == "clairic" else None
+            row["neurons"] += rate * (usage.get("input_tokens") or 0) / 1e6 if rate else 0
+            row["vercel_usd"] += (usage.get("cost") or 0) if provider == "chat" else 0
+        for row in days.values():
+            row["cf_usd"] = max(0.0, row["neurons"] - FREE_NEURONS) * NEURON_USD
+            for m in row["models"].values():
+                m["latency"] /= m["calls"]
+        settings = ai_settings()
+        monthly = settings["monthly_usd"]
+        throttled = storage.get("ai-throttled")
+        return JSONResponse({"settings": settings, "free_neurons": FREE_NEURONS, "max_monthly_usd": MAX_MONTHLY_USD,
+                             "budget": {"monthly_usd": monthly, **budget(storage, monthly),
+                                        "rpm": int(os.getenv("EVENT_AI_SECONDARY_RPM", "10")),
+                                        "balance": vercel_credits() if settings["secondary_ready"] else None,
+                                        "throttled": throttled if throttled and throttled["until"] >
+                                        datetime.now(UTC).isoformat() else None},
+                             "options": {"primary": list(CLOUDFLARE_MODELS) if settings["primary_provider"] == "clairic"
+                                         else [settings["primary_model"]],
+                                         "secondary": vercel_models() if settings["secondary_ready"] else []},
+                             "days": sorted(days.values(), key=lambda r: r["day"])})
+
     routes = [Route("/api/config", config), Route("/api/live", live), Route("/api/orders", orders),
-              Route("/api/news", news), Route("/api/watchlist", save_watchlist, methods=["PUT"]),
-              Route("/api/control/{action}", control, methods=["POST"])]
+              Route("/api/news", news), Route("/api/news/assess", assess, methods=["POST"]),
+              Route("/api/watchlist", save_watchlist, methods=["PUT"]),
+              Route("/api/control/{action}", control, methods=["POST"]),
+              Route("/api/ai", ai, methods=["GET", "PUT"])]
     if WEB_DIST.is_dir():
         routes.append(Mount("/", StaticFiles(directory=WEB_DIST, html=True)))
     return Starlette(routes=routes, lifespan=lifespan)

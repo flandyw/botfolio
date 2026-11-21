@@ -17,7 +17,12 @@ from botfolio.events.models import Event
 ISSUER_FEEDS = {
     "AAPL": "https://www.apple.com/newsroom/rss-feed.rss",
     "NVDA": "https://nvidianews.nvidia.com/cats/press_release.xml",
+    "GOOGL": "https://blog.google/rss/",
+    "META": "https://about.fb.com/feed/",
+    "AMZN": "https://www.aboutamazon.com/news/rss",
 }
+YAHOO_FEED = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={}&region=US&lang=en-US"
+BROWSER = {"User-Agent": "Mozilla/5.0"}  # Yahoo answers 429 to the default requests agent
 
 
 class Text(HTMLParser):
@@ -97,9 +102,9 @@ class AlpacaNews:
 
 
 class IssuerNews:
-    def __init__(self, ticker, url):
+    def __init__(self, ticker, url, http=None):
         self.ticker, self.url = ticker, url
-        self.http = HTTP()
+        self.http = http or HTTP(BROWSER)
 
     async def poll(self, start, end):
         return await asyncio.to_thread(self.fetch, start, end)
@@ -137,6 +142,23 @@ class IssuerNews:
                 ticker=self.ticker, event_type="news", published_at=published, content_at=updated,
                 received_at=received, source_url=link, text=text))
         return result
+
+
+class YahooNews:
+    """Yahoo Finance headlines for the whole watchlist, a few tickers per poll so a cycle never waits on all."""
+    def __init__(self, symbols, per_poll=3):
+        self.symbols, self.per_poll, self.next = symbols, per_poll, 0
+        self.http = HTTP(BROWSER)
+
+    async def poll(self, start, end):
+        return await asyncio.to_thread(self.fetch, start, end)
+
+    def fetch(self, start, end):
+        if not self.symbols:
+            return []
+        batch = [self.symbols[(self.next + i) % len(self.symbols)] for i in range(min(self.per_poll, len(self.symbols)))]
+        self.next = (self.next + len(batch)) % len(self.symbols)
+        return [e for s in batch for e in IssuerNews(s, YAHOO_FEED.format(s.replace(".", "-")), self.http).fetch(start, end)]
 
 
 class SECFilings:

@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -248,3 +249,99 @@ def test_forward_after_hours_pending_until_next_open():
     assert event_is_fresh(e, next_open)
     assert event_is_fresh(e, next_open+timedelta(minutes=4))
     assert not event_is_fresh(e, next_open+timedelta(minutes=6))
+
+
+def test_yahoo_news_round_robins_watchlist():
+    from botfolio.events.providers import YahooNews
+
+    provider = YahooNews(["AAPL", "BRK.B", "MSFT"], per_poll=2)
+    provider.http.get = Mock(return_value=Mock(content=b"<rss><channel></channel></rss>"))
+    provider.fetch(AT, AT)
+    provider.fetch(AT, AT)
+    urls = [c.args[0] for c in provider.http.get.call_args_list]
+    assert [u.split("s=")[1].split("&")[0] for u in urls] == ["AAPL", "BRK-B", "MSFT", "AAPL"]
+
+
+def router_env(monkeypatch, share=None):
+    from botfolio.events.ai import Router
+
+    monkeypatch.setenv("EVENT_AI_PROVIDER", "clairic")
+    monkeypatch.setenv("EVENT_AI_MODEL", "clairic")
+    monkeypatch.setenv("EVENT_AI_URL", "https://cf.example/ai/run/@cf/cloudflare/clairic")
+    monkeypatch.setenv("EVENT_AI_KEY", "k")
+    monkeypatch.setenv("EVENT_AI_SECONDARY_PROVIDER", "chat")
+    monkeypatch.setenv("EVENT_AI_SECONDARY_MODEL", "meta/muse-ember")
+    monkeypatch.setenv("EVENT_AI_SECONDARY_URL", "https://vercel.example/v1/chat/completions")
+    monkeypatch.setenv("EVENT_AI_SECONDARY_KEY", "k")
+    monkeypatch.setenv("EVENT_AI_SECONDARY_EXPERIMENT", "muse-v1")
+    monkeypatch.setenv("EVENT_AI_MONTHLY_USD", "5")
+    if share is None:
+        monkeypatch.delenv("EVENT_AI_SECONDARY_SHARE", raising=False)
+    else:
+        monkeypatch.setenv("EVENT_AI_SECONDARY_SHARE", share)
+    return Router("clairic-v2")
+
+
+def spent(store, model, response, cost=None):
+    with store.storage.tx() as conn:
+        conn.execute("INSERT INTO event_decisions VALUES (?,?,?,?,?,?,?,?,?)", (
+            f"{model}{cost}{json.dumps(response)}", "x", model, "{}", "{}", json.dumps(response), 1.0, cost, datetime.now(UTC).isoformat()))
+
+
+def test_router_fixed_share_splits_articles(monkeypatch):
+    router, store = router_env(monkeypatch, "0.4"), EventStore(Storage(":memory:"))
+    picks = [router.use_secondary(store, event(source_id=str(i)), now=i * 60.0) for i in range(500)]
+    assert 150 < sum(picks) < 250
+    same = event(source_id="7")
+    assert router.use_secondary(store, same, now=1e6) == router.use_secondary(store, same, now=2e6)
+
+
+def test_router_paces_budget_and_overflows_free_neurons(monkeypatch):
+    router, store = router_env(monkeypatch), EventStore(Storage(":memory:"))
+    assert router.share == "auto" and router.use_secondary(store, event(), now=0)
+    spent(store, "chat:meta/muse-ember", {}, cost=1.0)  # far over today's pace
+    assert not router.use_secondary(store, event(), now=100)
+    spent(store, "clairic:clairic", {"result": {"usage": {"input_tokens": 2_000_000}}})  # past the free neurons
+    assert router.use_secondary(store, event(), now=200)
+    router.configure({"monthly_usd": 20})  # a bigger budget from the control page reopens Vercel
+    assert router.use_secondary(store, event(), now=300)
+    spent(store, "chat:meta/muse-ember", {}, cost=19.5)  # the month's credit is gone
+    assert not router.use_secondary(store, event(), now=400)
+
+
+def test_router_caps_rate_and_falls_back_when_throttled(monkeypatch):
+    from botfolio.events.ai import Throttled
+
+    router, store = router_env(monkeypatch), EventStore(Storage(":memory:"))
+    router.calls = [0.0] * router.rpm
+    assert not router.use_secondary(store, event(), now=1)
+    assert router.use_secondary(store, event(), now=61)
+    router.calls = []
+    router.secondary.evaluate = Mock(side_effect=Throttled(429, 120))
+    router.primary.evaluate = Mock(side_effect=lambda e, c: (abstain(e, "fallback"), {}, {}))
+    decision = router.analyze(store, event(), {})
+    assert decision[2] == "clairic:clairic" and store.storage.get("ai-throttled")["status"] == 429
+    assert not router.use_secondary(store, event(source_id="2"))
+    assert router.decision(store, event()) is not None
+
+
+def test_router_applies_saved_models(monkeypatch):
+    from botfolio.events.ai import Router
+
+    monkeypatch.setenv("EVENT_AI_PROVIDER", "clairic")
+    monkeypatch.setenv("EVENT_AI_MODEL", "clairic")
+    monkeypatch.setenv("EVENT_AI_URL", "https://cf.example/ai/run/@cf/cloudflare/clairic")
+    monkeypatch.setenv("EVENT_AI_KEY", "k")
+    monkeypatch.setenv("EVENT_AI_SECONDARY_PROVIDER", "chat")
+    monkeypatch.setenv("EVENT_AI_SECONDARY_MODEL", "meta/muse-ember")
+    monkeypatch.setenv("EVENT_AI_SECONDARY_URL", "https://vercel.example/v1/chat/completions")
+    monkeypatch.setenv("EVENT_AI_SECONDARY_KEY", "k")
+    monkeypatch.setenv("EVENT_AI_SECONDARY_EXPERIMENT", "muse-v1")
+    router = Router("clairic-v2")
+    router.configure({"primary_model": "clairic-flash", "secondary_model": "meta/muse-glimmer-30b", "share": 1})
+    assert router.primary.url.endswith("/@cf/cloudflare/clairic-flash")
+    assert router.primary_experiment == "clairic-v2+clairic-flash"
+    assert router.secondary_experiment == "muse-v1+meta-muse-glimmer-30b" and router.share == 1
+    monkeypatch.delenv("EVENT_AI_SECONDARY_SHARE", raising=False)
+    router.configure({})
+    assert (router.primary_experiment, router.share) == ("clairic-v2", "auto")

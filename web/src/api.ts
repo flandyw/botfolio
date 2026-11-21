@@ -32,6 +32,42 @@ export type Live = {
   intents: Intent[];
 };
 
+export type AiModelUsage = { calls: number; failures: number; input: number; output: number; latency: number };
+
+export type AiUsageDay = {
+  day: string;
+  neurons: number;
+  cf_usd: number;
+  vercel_usd: number;
+  models: Record<string, AiModelUsage>;
+};
+
+export type AiUsage = {
+  settings: {
+    primary_provider: string;
+    primary_model: string;
+    secondary_ready: boolean;
+    secondary_model: string;
+    share: number | "auto";
+    monthly_usd: number;
+  };
+  free_neurons: number;
+  max_monthly_usd: number;
+  budget: {
+    monthly_usd: number;
+    month_usd: number;
+    today_usd: number;
+    per_day: number;
+    pace: number;
+    neurons: number;
+    rpm: number;
+    balance: number | null;
+    throttled: { at: string; status: number; until: string } | null;
+  };
+  options: { primary: string[]; secondary: string[] };
+  days: AiUsageDay[];
+};
+
 export type StrategyName = "news" | "momentum" | "etf_trend";
 
 export type StrategyStatus = {
@@ -100,10 +136,20 @@ export type NewsItem = {
     risks: string[];
     model: string;
     experiment: string;
+    at: string;
   } | null;
 };
 
-export type News = { tickers: string[]; total: number; archived: boolean; items: NewsItem[] };
+export type News = {
+  tickers: string[];
+  sources: string[];
+  total: number;
+  archived: boolean;
+  queued: string[];
+  unassessed: number;
+  last_assessed: string | null;
+  items: NewsItem[];
+};
 
 /* --- Alpaca JS SDK Bridge (/api/alpaca/*) types --- */
 

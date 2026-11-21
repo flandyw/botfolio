@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AiUsage } from "./AiUsage";
 import { type Config, type JournalRow, type Live, send } from "./api";
 import { cell, cx } from "./classes";
 import { etDateTime, num } from "./format";
@@ -132,6 +133,8 @@ export function Control({
 
         <Watchlist config={config} onSaved={onChange} />
       </div>
+
+      <AiUsage />
 
       <Section title="Order journal" note={journal.data ? String(journal.data.length) : undefined}>
         {journal.error && <Message error>{journal.error}</Message>}

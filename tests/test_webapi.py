@@ -159,3 +159,21 @@ def test_news_lists_saved_articles_with_the_latest_assessment(api):
     assert spy["decision"]["action"] == "WAIT" and spy["decision"]["experiment"] == "ui-disabled"
     assert len(spy["text"]) == 600 and spy["truncated"] is True
     assert [item["ticker"] for item in request(api, "/api/news", query="ticker=spy")[1]["items"]] == ["SPY"]
+
+
+def test_ai_settings_validated_and_reported(api, monkeypatch):
+    monkeypatch.setenv("EVENT_AI_PROVIDER", "clairic")
+    monkeypatch.setenv("EVENT_AI_MODEL", "clairic")
+    monkeypatch.setenv("EVENT_AI_SECONDARY_PROVIDER", "disabled")
+    assert request(api, "/api/ai", "PUT", {"share": 0.4}, WRITE)[0] == 200
+    assert request(api, "/api/ai", "PUT", {"share": 2}, WRITE)[0] == 400
+    assert request(api, "/api/ai", "PUT", {"primary_model": "gpt"}, WRITE)[0] == 400
+    assert request(api, "/api/ai", "PUT", {"primary_model": "clairic-flash"})[0] == 403
+    status, body = request(api, "/api/ai", "PUT", {"primary_model": "clairic-flash"}, WRITE)
+    assert status == 200 and body["settings"]["primary_model"] == "clairic-flash"
+    assert body["options"]["primary"] == ["clairic", "clairic-flash"] and body["days"] == []
+    assert body["settings"]["share"] == 0.4 and body["budget"]["month_usd"] == 0
+    assert request(api, "/api/ai", "PUT", {"share": "auto"}, WRITE)[1]["settings"]["share"] == "auto"
+    assert request(api, "/api/ai", "PUT", {"monthly_usd": 500}, WRITE)[0] == 400
+    status, body = request(api, "/api/ai", "PUT", {"monthly_usd": 2.5}, WRITE)
+    assert body["settings"]["monthly_usd"] == 2.5 and body["budget"]["monthly_usd"] == 2.5
