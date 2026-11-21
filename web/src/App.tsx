@@ -23,8 +23,14 @@ function initialTheme(): Theme {
 
 /** `#/markets/SPY` or `#/desk`; anything else is the desk. */
 function readRoute(): Route {
-  const [view, symbol = ""] = location.hash.replace(/^#\/?/, "").split("/");
-  return { view: view === "markets" ? "markets" : "desk", symbol: decodeURIComponent(symbol).toUpperCase() };
+  const [view, raw = ""] = location.hash.replace(/^#\/?/, "").split("/");
+  let symbol = "";
+  try {
+    symbol = decodeURIComponent(raw).toUpperCase();
+  } catch {
+    // a malformed link opens the page without a symbol
+  }
+  return { view: view === "markets" ? "markets" : "desk", symbol };
 }
 
 export default function App() {
