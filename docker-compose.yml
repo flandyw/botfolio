@@ -24,21 +24,34 @@ services:
       driver: json-file
       options: {max-size: "20m", max-file: "5"}
 
-  dashboard:
+  api:
     image: botfolio:latest
     depends_on: [bot]
-    container_name: botfolio-dashboard
+    container_name: botfolio-api
     env_file: .env
-    command: ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0",
-              "--server.headless=true", "--browser.gatherUsageStats=false"]
+    command: ["botfolio", "web", "--host", "0.0.0.0", "--port", "8600"]
     environment:
       BOTFOLIO_DB_PATH: /app/data/botfolio.sqlite
     volumes:
       - ./data:/app/data
-    # Bound to localhost: reach it through an SSH tunnel (ssh -L 8501:localhost:8501 user@vps)
-    # or put an authenticating reverse proxy in front. Do not expose it publicly as-is.
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  web:
+    build: ./web
+    image: botfolio-web:latest
+    depends_on: [api]
+    container_name: botfolio-web
+    env_file: .env
+    environment:
+      BOTFOLIO_API_URL: http://api:8600
+      HOST: 0.0.0.0
+    # Bound to localhost: reach it through an SSH tunnel (ssh -L 8601:localhost:8601 user@vps)
+    # or Tailscale. Set BOTFOLIO_DASHBOARD_PASSWORD before exposing it any further.
     ports:
-      - "127.0.0.1:8501:8501"
+      - "127.0.0.1:8601:8601"
     restart: unless-stopped
     logging:
       driver: json-file

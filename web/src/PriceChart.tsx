@@ -8,7 +8,7 @@ import {
   type Time,
 } from "lightweight-charts";
 import type { AlpacaStreamBar, Bar } from "./api";
-import { useChart } from "./chart";
+import { LINES, alpha, palette, useChart, useThemeKey } from "./chart";
 import { calcBollinger, calcEma, calcRsi, calcSma, calcVwap } from "./indicators";
 
 export type ChartOverlays = {
@@ -23,10 +23,12 @@ type Props = {
   bars: Bar[];
   overlays: ChartOverlays;
   liveBar?: AlpacaStreamBar | null;
+  className?: string;
 };
 
-export function PriceChart({ bars, overlays, liveBar }: Props) {
+export function PriceChart({ bars, overlays, liveBar, className }: Props) {
   const { ref, chart } = useChart();
+  const themeKey = useThemeKey();
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const lastBarTimeRef = useRef<number>(0);
@@ -34,13 +36,14 @@ export function PriceChart({ bars, overlays, liveBar }: Props) {
   useEffect(() => {
     if (!chart) return;
     const handles: ISeriesApi<"Candlestick" | "Histogram" | "Line">[] = [];
+    const { up, down } = palette();
 
     const candles = chart.addSeries(CandlestickSeries, {
-      upColor: "#10b981",
-      downColor: "#f43f5e",
+      upColor: up,
+      downColor: down,
       borderVisible: false,
-      wickUpColor: "#10b981",
-      wickDownColor: "#f43f5e",
+      wickUpColor: up,
+      wickDownColor: down,
     });
     candles.priceScale().applyOptions({ scaleMargins: { top: 0.08, bottom: 0.22 } });
     candles.setData(
@@ -59,13 +62,15 @@ export function PriceChart({ bars, overlays, liveBar }: Props) {
     const vol = chart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
       priceScaleId: "vol",
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
     vol.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     vol.setData(
       bars.map((b) => ({
         time: b.time as Time,
         value: b.volume,
-        color: b.close >= b.open ? "rgba(16,185,129,0.28)" : "rgba(244,63,94,0.28)",
+        color: alpha(b.close >= b.open ? up : down, 0.3),
       })),
     );
     handles.push(vol);
@@ -73,8 +78,8 @@ export function PriceChart({ bars, overlays, liveBar }: Props) {
 
     if (overlays.sma20) {
       const s = chart.addSeries(LineSeries, {
-        color: "#f59e0b",
-        lineWidth: 2,
+        color: LINES.sma20,
+        lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: false,
       });
@@ -84,8 +89,8 @@ export function PriceChart({ bars, overlays, liveBar }: Props) {
 
     if (overlays.ema50) {
       const s = chart.addSeries(LineSeries, {
-        color: "#a855f7",
-        lineWidth: 2,
+        color: LINES.ema50,
+        lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: false,
       });
@@ -95,8 +100,8 @@ export function PriceChart({ bars, overlays, liveBar }: Props) {
 
     if (overlays.vwap) {
       const s = chart.addSeries(LineSeries, {
-        color: "#06b6d4",
-        lineWidth: 2,
+        color: LINES.vwap,
+        lineWidth: 1,
         lineStyle: LineStyle.Dashed,
         priceLineVisible: false,
         lastValueVisible: false,
@@ -108,14 +113,14 @@ export function PriceChart({ bars, overlays, liveBar }: Props) {
     if (overlays.bb) {
       const bb = calcBollinger(bars, 20, 2);
       const u = chart.addSeries(LineSeries, {
-        color: "rgba(59,130,246,0.65)",
+        color: LINES.bb,
         lineWidth: 1,
         lineStyle: LineStyle.Dotted,
         priceLineVisible: false,
         lastValueVisible: false,
       });
       const l = chart.addSeries(LineSeries, {
-        color: "rgba(59,130,246,0.65)",
+        color: LINES.bb,
         lineWidth: 1,
         lineStyle: LineStyle.Dotted,
         priceLineVisible: false,
@@ -130,8 +135,8 @@ export function PriceChart({ bars, overlays, liveBar }: Props) {
       const rsi = chart.addSeries(
         LineSeries,
         {
-          color: "#38bdf8",
-          lineWidth: 2,
+          color: LINES.rsi,
+          lineWidth: 1,
           priceLineVisible: false,
           priceFormat: { type: "custom", formatter: (v: number) => v.toFixed(0) },
         },
@@ -140,7 +145,7 @@ export function PriceChart({ bars, overlays, liveBar }: Props) {
       rsi.setData(calcRsi(bars, 14).map((p) => ({ time: p.time as Time, value: p.value })));
       rsi.createPriceLine({
         price: 70,
-        color: "rgba(244,63,94,0.45)",
+        color: alpha(down, 0.5),
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
@@ -148,7 +153,7 @@ export function PriceChart({ bars, overlays, liveBar }: Props) {
       });
       rsi.createPriceLine({
         price: 30,
-        color: "rgba(16,185,129,0.45)",
+        color: alpha(up, 0.5),
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
@@ -172,7 +177,7 @@ export function PriceChart({ bars, overlays, liveBar }: Props) {
         }
       }
     };
-  }, [chart, bars, overlays]);
+  }, [chart, bars, overlays, themeKey]);
 
   // Apply incoming live Alpaca WebSocket bar directly onto the chart
   useEffect(() => {
@@ -189,14 +194,18 @@ export function PriceChart({ bars, overlays, liveBar }: Props) {
     volumeRef.current.update({
       time: liveBar.time as Time,
       value: liveBar.volume,
-      color: liveBar.close >= liveBar.open ? "rgba(16,185,129,0.35)" : "rgba(244,63,94,0.35)",
+      color: alpha(liveBar.close >= liveBar.open ? palette().up : palette().down, 0.3),
     });
   }, [liveBar]);
 
   return (
     <div className="relative">
-      {overlays.rsi && <div className="pointer-events-none absolute bottom-[138px] left-2.5 z-[2] rounded bg-card/80 px-1.5 text-[11px] font-medium text-muted-foreground">RSI (14)</div>}
-      <div ref={ref} className="h-[390px] w-full md:h-[520px]" />
+      {overlays.rsi && (
+        <div className="pointer-events-none absolute bottom-[138px] left-0 z-[2] bg-bg pr-1.5 text-[11px] text-dim">
+          RSI 14
+        </div>
+      )}
+      <div ref={ref} className={className ?? "h-[420px] w-full"} />
     </div>
   );
 }

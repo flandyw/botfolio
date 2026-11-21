@@ -14,15 +14,96 @@ export type Live = {
   execution_age_s: number | null;
   market_open: boolean | null;
   phase: string | null;
+  /** The execution monitor's last error, if any. */
+  message?: string | null;
   enabled: boolean;
   armed: boolean;
+  /** The emergency stop is active. */
+  stopped: boolean;
+  worker_ready: boolean;
+  news_fresh: boolean;
+  provider_failures: boolean;
+  issuer_feed_failures: boolean;
+  ai_ready: boolean;
   open_intents: number | null;
+  strategies: Partial<Record<StrategyName, StrategyStatus>>;
+  strategy_config: Record<StrategyName, StrategyConfig>;
+  news_check: { at: string; ticker: string; result: string } | null;
+  intents: Intent[];
+};
+
+export type StrategyName = "news" | "momentum" | "etf_trend";
+
+export type StrategyStatus = {
+  at?: string;
+  note?: string | null;
+  orders?: { symbol: string; side: string; result: string }[];
+};
+
+export type StrategyConfig = {
+  enabled: boolean;
+  max_positions: number;
+  position_pct: number;
+  risk_pct?: number;
+  allocation_pct?: number;
+  sma_days?: number;
+};
+
+/** An order or position the worker is managing, and the strategy that owns it. */
+export type Intent = {
+  symbol: string;
+  strategy: StrategyName;
+  side: string;
+  qty: number;
+  state: string;
+  opened?: string;
+  exit_requested?: string;
 };
 
 export type Config = {
   symbols: string[];
+  etfs: string[];
   feed: string;
+  max_symbols: number;
+  password_required: boolean;
 };
+
+/** One row of the worker's order journal. */
+export type JournalRow = {
+  key: string;
+  strategy: StrategyName;
+  symbol: string;
+  side?: string;
+  qty?: number;
+  limit?: number;
+  stop?: number | null;
+  state: string;
+  broker_status?: string;
+  opened?: string;
+  exit_requested?: string;
+  error?: string;
+};
+
+export type NewsItem = {
+  key: string;
+  ticker: string;
+  source: string;
+  url: string;
+  published_at: string;
+  received_at: string;
+  text: string;
+  truncated: boolean;
+  decision: {
+    action: string;
+    reasoning: string;
+    evidence: string[];
+    risks: string[];
+    model: string;
+    experiment: string;
+  } | null;
+};
+
+export type News = { tickers: string[]; total: number; archived: boolean; items: NewsItem[] };
 
 /* --- Alpaca JS SDK Bridge (/api/alpaca/*) types --- */
 
@@ -134,9 +215,62 @@ export type AlpacaStreamBar = Bar & {
   vwap?: number | null;
 };
 
-export async function get<T>(path: string): Promise<T> {
-  const r = await fetch(`/api/${path}`);
+const PASSWORD_KEY = "botfolio-password";
+
+export function savedPassword() {
+  try {
+    return sessionStorage.getItem(PASSWORD_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function savePassword(password: string) {
+  try {
+    sessionStorage.setItem(PASSWORD_KEY, password);
+  } catch {
+    // storage is unavailable; the password lasts until the page reloads
+  }
+}
+
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** Fired when the saved password is refused, e.g. after it was changed on the server. */
+export const LOCKED = "botfolio-locked";
+
+async function call<T>(path: string, init: RequestInit, given?: string): Promise<T> {
+  const password = given ?? savedPassword();
+  const headers = { ...(init.headers as Record<string, string>), ...(password && { "X-Botfolio-Password": password }) };
+  const r = await fetch(`/api/${path}`, { ...init, headers });
   const text = await r.text();
-  if (!r.ok) throw new Error(text || r.statusText);
+  if (!r.ok) {
+    if (r.status === 401 && given === undefined) {
+      savePassword("");
+      dispatchEvent(new Event(LOCKED));
+    }
+    let message = text || r.statusText;
+    try {
+      message = (JSON.parse(text) as { error?: string }).error ?? message;
+    } catch {
+      // not JSON; show the body as it is
+    }
+    throw new ApiError(r.status, message);
+  }
   return JSON.parse(text) as T;
 }
+
+export const get = <T,>(path: string, password?: string) => call<T>(path, {}, password);
+
+/** A change to the bot: arming, pausing, stopping or saving the watchlist. */
+export const send = <T,>(method: "POST" | "PUT", path: string, body: unknown = {}) =>
+  call<T>(path, {
+    method,
+    headers: { "Content-Type": "application/json", "X-Botfolio": "1" },
+    body: JSON.stringify(body),
+  });

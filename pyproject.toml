@@ -12,7 +12,6 @@ dependencies = [
     "pydantic>=2.6",
     "pandas-market-calendars>=4.4",
     "python-dotenv>=1.0",
-    "streamlit>=1.35",
     "starlette>=0.40",
     "uvicorn>=0.30",
 ]

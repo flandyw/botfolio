@@ -1,7 +1,7 @@
 /**
  * Standalone Node server for Botfolio web UI:
  * - Serves `/api/alpaca/*` via `@alpacahq/alpaca-trade-api` (paper-only, read-only)
- * - Proxies `/api/*` (paper worker status and watchlist) to `botfolio web`
+ * - Proxies `/api/*` (worker status, controls, order journal and news) to `botfolio web`
  * - Serves the built SPA from `web/dist`
  *
  * Usage: `npm run server` (after `npm run build`)
@@ -15,6 +15,7 @@ import { createAlpacaBridge } from "./alpaca-bridge.ts";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.resolve(__dirname, "..", "dist");
 const PORT = Number(process.env.PORT ?? 8601);
+const HOST = process.env.HOST ?? "127.0.0.1";
 const PYTHON_API = process.env.BOTFOLIO_API_URL ?? "http://127.0.0.1:8600";
 
 const MIME: Record<string, string> = {
@@ -72,8 +73,8 @@ const server = http.createServer(async (req, res) => {
   serveStatic(req, res);
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`Botfolio Alpaca JS server listening on http://127.0.0.1:${PORT} (API proxy -> ${PYTHON_API})`);
+server.listen(PORT, HOST, () => {
+  console.log(`Botfolio Alpaca JS server listening on http://${HOST}:${PORT} (API proxy -> ${PYTHON_API})`);
 });
 
 process.on("SIGINT", () => {

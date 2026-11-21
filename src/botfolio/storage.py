@@ -1,4 +1,4 @@
-"""SQLite state shared by the paper worker and dashboards."""
+"""SQLite state shared by the paper worker and the web dashboard."""
 
 from __future__ import annotations
 

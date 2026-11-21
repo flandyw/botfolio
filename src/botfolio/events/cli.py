@@ -1,4 +1,4 @@
-"""News ingestion and paper execution commands."""
+"""The paper worker: news ingestion, the combined strategies and paper execution."""
 from __future__ import annotations
 
 import asyncio
@@ -9,6 +9,7 @@ import os
 from datetime import UTC, datetime, timedelta
 
 from botfolio.config import load_credentials
+from botfolio.config import watchlist as load_watchlist
 from botfolio.data.alpaca import AlpacaClient
 from botfolio.data.calendar import frame_to_bars, get_calendar
 from botfolio.events.ai import AI, analyze
@@ -17,6 +18,7 @@ from botfolio.events.paper import PaperExecutor, configured, event_is_fresh
 from botfolio.events.providers import ISSUER_FEEDS, AlpacaNews, IssuerNews, SECFilings
 from botfolio.events.store import EventStore
 from botfolio.storage import Storage
+from botfolio.strategies import StrategyRunner, strategy_loop
 
 log = logging.getLogger(__name__)
 
@@ -66,15 +68,18 @@ async def watch(cfg, store, experiment, once=False):
     issuer_feeds = [IssuerNews(ticker, url) for ticker, url in ISSUER_FEEDS.items()]
     ai = AI()
     paper = PaperExecutor(AlpacaClient(creds, timeout=5, max_retries=1), store,
-                          int(os.getenv("EVENT_HOLD_MINUTES", "15")))
-    monitor = None if once else asyncio.create_task(execution_monitor(paper, store))
+                          int(os.getenv("EVENT_HOLD_MINUTES", "15")), cfg.limits())
+    runner = StrategyRunner(cfg, AlpacaClient(creds, timeout=15, max_retries=2), paper, store.storage)
+    tasks = [] if once else [asyncio.create_task(execution_monitor(paper, store)),
+                             asyncio.create_task(strategy_loop(runner))]
     try:
         while True:
             now = datetime.now(UTC)
             if once:
                 await execution_monitor(paper, store, once=True)
+                await strategy_loop(runner, once=True)
             try:
-                watchlist = store.storage.get("event-watchlist") or cfg.symbols
+                watchlist = load_watchlist(store.storage, cfg)
                 providers[0].symbols = watchlist
                 active_providers = providers + [p for p in issuer_feeds if p.ticker in watchlist]
                 results = await asyncio.gather(*(p.poll(now-timedelta(days=1), now) for p in active_providers),
@@ -107,7 +112,7 @@ async def watch(cfg, store, experiment, once=False):
                         context = market_context(frame_to_bars(bars_df, get_calendar()), event, event.received_at)
                         decision = await asyncio.to_thread(analyze, store, event, experiment, ai, context)
                     state = store.storage.get("event-execution-state") or {}
-                    if (configured() and state.get("phase") == "ready" and not failures
+                    if (cfg.strategies.news.enabled and configured() and state.get("phase") == "ready" and not failures
                         and not event.source.startswith("rss:")
                         and (ai.provider != "clairic" or decision[0].recommended_action in {"BUY", "SELL"})):
                         data = await asyncio.to_thread(client._request, "GET",
@@ -122,15 +127,15 @@ async def watch(cfg, store, experiment, once=False):
                 return
             await asyncio.sleep(15 if get_calendar("NASDAQ").is_open(datetime.now(UTC)) else 60)
     finally:
-        if monitor:
-            monitor.cancel()
-            await asyncio.gather(monitor, return_exceptions=True)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def parser(sub):
-    event = sub.add_parser("events", help="watch news and run the paper trader")
+    event = sub.add_parser("events", help="run the combined strategies on Alpaca Paper")
     commands = event.add_subparsers(dest="event_cmd", required=True)
     commands.add_parser("decision-stats", help="summarize saved AI decisions by experiment, model and source")
-    watch_parser = commands.add_parser("watch", help="run the news and execution monitors")
+    watch_parser = commands.add_parser("watch", help="run the news, strategy and execution monitors")
     watch_parser.add_argument("--experiment", default=os.getenv("EVENT_AI_EXPERIMENT") or "clairic-v1")
     watch_parser.add_argument("--once", action="store_true")

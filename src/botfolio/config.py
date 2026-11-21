@@ -16,17 +16,59 @@ class DataConfig(BaseModel):
     feed: Literal["iex", "sip"] = "iex"
 
 
+class NewsConfig(BaseModel):
+    enabled: bool = True
+    max_positions: int = Field(5, ge=1)
+    position_pct: float = Field(25.0, gt=0, le=100)
+    risk_pct: float = Field(1.0, gt=0, le=5)
+
+
+class MomentumConfig(BaseModel):
+    enabled: bool = True
+    max_positions: int = Field(5, ge=1)
+    position_pct: float = Field(10.0, gt=0, le=100)
+    risk_pct: float = Field(0.5, gt=0, le=5)
+    lookback: int = Field(14, ge=2)
+
+
+class TrendConfig(BaseModel):
+    enabled: bool = True
+    allocation_pct: float = Field(50.0, gt=0, le=100)
+    sma_days: int = Field(200, ge=2)
+    band_pct: float = Field(1.0, ge=0)
+
+
+class StrategiesConfig(BaseModel):
+    news: NewsConfig = Field(default_factory=NewsConfig)
+    momentum: MomentumConfig = Field(default_factory=MomentumConfig)
+    etf_trend: TrendConfig = Field(default_factory=TrendConfig)
+
+
 class AppConfig(BaseModel):
     symbols: list[str] = Field(default_factory=lambda: ["QQQ", "SPY"])
+    etfs: list[str] = Field(default_factory=lambda: ["QQQ", "SPY"])
     data: DataConfig = Field(default_factory=DataConfig)
+    strategies: StrategiesConfig = Field(default_factory=StrategiesConfig)
     db_path: str = "data/botfolio.sqlite"
     log_level: str = "INFO"
     log_json: bool = True
 
-    @field_validator("symbols")
+    @field_validator("symbols", "etfs")
     @classmethod
     def _upper(cls, v: list[str]) -> list[str]:
-        return [s.strip().upper() for s in v if s.strip()]
+        return list(dict.fromkeys(s.strip().upper() for s in v if s.strip()))
+
+    def limits(self) -> dict[str, dict[str, float]]:
+        """Per-strategy position caps used by the paper executor."""
+        s = self.strategies
+        return {
+            "news": dict(max_positions=s.news.max_positions, position_pct=s.news.position_pct,
+                         risk_pct=s.news.risk_pct),
+            "momentum": dict(max_positions=s.momentum.max_positions, position_pct=s.momentum.position_pct,
+                             risk_pct=s.momentum.risk_pct),
+            "etf_trend": dict(max_positions=max(1, len(self.etfs)),
+                              position_pct=s.etf_trend.allocation_pct / max(1, len(self.etfs))),
+        }
 
 
 class Credentials(BaseModel):
@@ -37,6 +79,14 @@ class Credentials(BaseModel):
         return f"Credentials(key_id={self.key_id[:4]}…)"
 
     __str__ = __repr__
+
+
+def watchlist(storage: Any, cfg: AppConfig) -> list[str]:
+    """Symbols every strategy trades: the control-room list, else the config plus any older saved list."""
+    saved = storage.get("watchlist")
+    if saved:
+        return list(saved)
+    return list(dict.fromkeys([*cfg.symbols, *(storage.get("event-watchlist") or [])]))
 
 
 def _env_bool(name: str) -> bool | None:

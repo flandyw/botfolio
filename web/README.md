@@ -1,6 +1,11 @@
-# Read-only paper dashboard
+# Web dashboard
 
-Run the worker status API from the repository root.
+- **Desk**: the paper account, the three strategies with their last run and orders, positions and recent orders.
+- **Markets**: the watchlist as a sortable table beside the chart. Filter it, click a row or use the arrow keys.
+- **News**: saved articles with the AI assessment of each.
+- **Control**: turn entries on or off, trigger the emergency stop, edit the watchlist and read the order journal.
+
+Run the worker API from the repository root.
 
 ```bash
 uv run botfolio web
@@ -13,6 +18,6 @@ npm ci
 npm run dev
 ```
 
-For a built dashboard, run `npm run build` and `npm run server` from `web/`, then open <http://127.0.0.1:8601>. The Node server uses the paper credentials in the repository's `.env` and proxies worker status to port 8600. Set `BOTFOLIO_API_URL` for a different worker status API address.
+For a built dashboard, run `npm run build` and `npm run server` from `web/`, then open <http://127.0.0.1:8601>. The Node server uses the paper credentials in the repository's `.env` and proxies everything else under `/api` to the worker API on port 8600. Set `BOTFOLIO_API_URL` for a different API address and `HOST` to listen on another interface.
 
-Use the Streamlit control room to edit the watchlist, arm or pause orders, and trigger an emergency stop.
+Set `BOTFOLIO_DASHBOARD_PASSWORD` in `.env` to require a password for the Control and News pages. Account, prices and worker status stay readable without it.

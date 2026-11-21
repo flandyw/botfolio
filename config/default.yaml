@@ -1,4 +1,31 @@
-# The control room can override this news watchlist at runtime.
-symbols: [QQQ, SPY, VGT, XLK, SOXX, VUG]
+# The control room can override this watchlist at runtime. Every strategy trades from it.
+symbols: [
+  # ETFs
+  SPY, QQQ, IWM, DIA, VTI, VOO, VGT, XLK, SOXX, VUG, SMH, XLF, XLE, XLV, XLI, XLY, XLP, XLU, XLC, XLB,
+  XLRE, EFA, EEM, TLT, GLD,
+  # Technology
+  AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, AVGO, AMD, NFLX, ORCL, CRM, ADBE, INTC, CSCO, QCOM, TXN, MU,
+  AMAT, LRCX, KLAC, ASML, TSM, ARM, PLTR, SNOW, NOW, PANW, CRWD, SHOP, UBER, ABNB, PYPL, COIN, HOOD, SOFI,
+  MSTR, SMCI, DELL, IBM, MRVL, ANET, INTU, APP,
+  # Financials
+  JPM, BAC, WFC, GS, MS, C, V, MA, AXP, BLK, SCHW, BRK.B,
+  # Health care
+  UNH, JNJ, LLY, PFE, MRK, ABBV, TMO, ABT, AMGN, GILD, ISRG,
+  # Energy, consumer and communications
+  XOM, CVX, COP, WMT, COST, HD, LOW, TGT, MCD, SBUX, NKE, KO, PEP, PG, DIS, CMCSA, T, VZ, TMUS,
+  # Industrials and autos
+  BA, CAT, DE, GE, HON, LMT, RTX, UPS, F, GM, RIVN, BABA, BKNG,
+]
+# Watchlist symbols the trend strategy may hold overnight.
+etfs: [SPY, QQQ, IWM, DIA, VTI, VOO, VGT, XLK, SOXX, VUG, SMH, XLF, XLE, XLV, XLI, XLY, XLP, XLU, XLC, XLB,
+       XLRE, EFA, EEM, TLT, GLD]
 data:
   feed: iex
+# Every strategy submits orders to the Alpaca Paper account. A symbol is held by one strategy at a time.
+strategies:
+  news:       # AI call on fresh news: bracket order, stop 1%, target 2R, timed exit
+    {enabled: true, max_positions: 5, position_pct: 25, risk_pct: 1}
+  momentum:   # 30-minute noise-band breakout, long or short, stop at the far band, flat by the close
+    {enabled: true, max_positions: 5, position_pct: 10, risk_pct: 0.5, lookback: 14}
+  etf_trend:  # hold each ETF above its 200-day average; allocation is split equally across `etfs`
+    {enabled: true, allocation_pct: 50, sma_days: 200, band_pct: 1}
