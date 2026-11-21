@@ -5,14 +5,14 @@ services:
     build: .
     image: botfolio:latest
     container_name: botfolio-bot
-    command: ["botfolio", "forward"]
+    command: ["botfolio", "events", "watch"]
     env_file: .env
     environment:
       BOTFOLIO_DB_PATH: /app/data/botfolio.sqlite
       BOTFOLIO_LOG_JSON: "true"
     volumes:
       - ./data:/app/data
-    restart: unless-stopped          # automatic crash recovery (state is restored from SQLite)
+    restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "botfolio", "health", "--max-age", "900"]
@@ -28,6 +28,7 @@ services:
     image: botfolio:latest
     depends_on: [bot]
     container_name: botfolio-dashboard
+    env_file: .env
     command: ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0",
               "--server.headless=true", "--browser.gatherUsageStats=false"]
     environment:
@@ -42,15 +43,3 @@ services:
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
-
-  # One-off jobs, e.g.:
-  #   docker compose run --rm backtest botfolio backtest --start 2025-01-02 --end 2025-12-31
-  backtest:
-    image: botfolio:latest
-    profiles: ["tools"]
-    env_file: .env
-    environment:
-      BOTFOLIO_DB_PATH: /app/data/botfolio.sqlite
-    volumes:
-      - ./data:/app/data
-    command: ["botfolio", "report"]

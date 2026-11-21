@@ -25,4 +25,4 @@ RUN uv sync --frozen --no-dev && mkdir -p /app/data && chown -R botfolio:botfoli
 
 USER botfolio
 VOLUME ["/app/data"]
-CMD ["botfolio", "forward"]
+CMD ["botfolio", "events", "watch"]

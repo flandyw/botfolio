@@ -1,16 +1,14 @@
 import { useEffect, useRef } from "react";
 import {
   CandlestickSeries,
-  createSeriesMarkers,
   HistogramSeries,
   LineSeries,
   LineStyle,
   type ISeriesApi,
-  type SeriesMarker,
   type Time,
 } from "lightweight-charts";
-import type { AlpacaStreamBar, Bar, Trade } from "./api";
-import { floorIndex, useChart } from "./chart";
+import type { AlpacaStreamBar, Bar } from "./api";
+import { useChart } from "./chart";
 import { calcBollinger, calcEma, calcRsi, calcSma, calcVwap } from "./indicators";
 
 export type ChartOverlays = {
@@ -23,12 +21,11 @@ export type ChartOverlays = {
 
 type Props = {
   bars: Bar[];
-  trades: Trade[];
   overlays: ChartOverlays;
   liveBar?: AlpacaStreamBar | null;
 };
 
-export function PriceChart({ bars, trades, overlays, liveBar }: Props) {
+export function PriceChart({ bars, overlays, liveBar }: Props) {
   const { ref, chart } = useChart();
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
@@ -162,41 +159,9 @@ export function PriceChart({ bars, trades, overlays, liveBar }: Props) {
       if (panes[1]) panes[1].setHeight(115);
     }
 
-    const times = bars.map((b) => b.time);
-    const snap = (t: number) => {
-      const i = floorIndex(times, t);
-      return i >= 0 ? times[i] : null;
-    };
-    const markers: SeriesMarker<Time>[] = [];
-    for (const tr of trades) {
-      const e = snap(tr.entry_time);
-      const x = snap(tr.exit_time);
-      const long = tr.side > 0;
-      if (e !== null) {
-        markers.push({
-          time: e as Time,
-          position: long ? "belowBar" : "aboveBar",
-          color: long ? "#10b981" : "#f43f5e",
-          shape: long ? "arrowUp" : "arrowDown",
-          text: `${long ? "L" : "S"} ${tr.entry_price.toFixed(2)}`,
-        });
-      }
-      if (x !== null) {
-        markers.push({
-          time: x as Time,
-          position: long ? "aboveBar" : "belowBar",
-          color: tr.net_pnl >= 0 ? "#10b981" : "#f43f5e",
-          shape: "circle",
-          text: `${tr.exit_reason} ${tr.net_pnl >= 0 ? "+" : ""}$${tr.net_pnl.toFixed(0)}`,
-        });
-      }
-    }
-    markers.sort((a, b) => Number(a.time) - Number(b.time));
-    const plugin = createSeriesMarkers(candles, markers);
     chart.timeScale().fitContent();
 
     return () => {
-      plugin.detach();
       candleRef.current = null;
       volumeRef.current = null;
       for (const s of handles) {
@@ -207,7 +172,7 @@ export function PriceChart({ bars, trades, overlays, liveBar }: Props) {
         }
       }
     };
-  }, [chart, bars, trades, overlays]);
+  }, [chart, bars, overlays]);
 
   // Apply incoming live Alpaca WebSocket bar directly onto the chart
   useEffect(() => {
@@ -229,9 +194,9 @@ export function PriceChart({ bars, trades, overlays, liveBar }: Props) {
   }, [liveBar]);
 
   return (
-    <div className="chart-wrap">
-      {overlays.rsi && <div className="chart-label bottom">RSI (14)</div>}
-      <div ref={ref} className="chart tall" />
+    <div className="relative">
+      {overlays.rsi && <div className="pointer-events-none absolute bottom-[138px] left-2.5 z-[2] rounded bg-card/80 px-1.5 text-[11px] font-medium text-muted-foreground">RSI (14)</div>}
+      <div ref={ref} className="h-[390px] w-full md:h-[520px]" />
     </div>
   );
 }

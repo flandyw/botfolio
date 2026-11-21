@@ -142,18 +142,18 @@ export function createAlpacaBridge(cfg: AlpacaBridgeConfig = {}): AlpacaBridge {
     path.resolve(process.cwd(), "..", ".env");
   const dotEnv = loadDotEnv(envPath);
 
-  const baseUrl = readEnv(dotEnv, "ALPACA_BASE_URL", "APCA_API_BASE_URL");
+  const baseUrl = readEnv(dotEnv, "APCA_API_BASE_URL", "ALPACA_BASE_URL", "ALPACA_TRADING_URL");
   if (baseUrl && LIVE_URL_RE.test(baseUrl)) {
     throw new Error(
       `Refusing to start Alpaca bridge against live trading URL (${baseUrl}). Paper trading only.`,
     );
   }
 
-  const keyId = readEnv(dotEnv, "ALPACA_API_KEY", "APCA_API_KEY_ID");
-  const secret = readEnv(dotEnv, "ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY");
+  const keyId = readEnv(dotEnv, "ALPACA_KEY", "APCA_API_KEY_ID");
+  const secret = readEnv(dotEnv, "ALPACA_SECRET", "APCA_API_SECRET_KEY");
   const feed: "iex" | "sip" =
     cfg.feed ??
-    (readEnv(dotEnv, "ALPACA_DATA_FEED")?.toLowerCase() === "sip" ? "sip" : "iex");
+    (readEnv(dotEnv, "BOTFOLIO_DATA_FEED")?.toLowerCase() === "sip" ? "sip" : "iex");
   const defaultSymbols = cfg.defaultSymbols ?? DEFAULT_SYMBOLS;
 
   const alpaca =
@@ -256,7 +256,7 @@ export function createAlpacaBridge(cfg: AlpacaBridgeConfig = {}): AlpacaBridge {
   async function requirePaperClient(): Promise<Alpaca> {
     if (!alpaca) {
       throw new Error(
-        "Alpaca credentials not configured (set ALPACA_API_KEY and ALPACA_SECRET_KEY in .env)",
+        "Alpaca credentials not configured (set ALPACA_KEY and ALPACA_SECRET in .env)",
       );
     }
     return alpaca;

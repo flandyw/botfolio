@@ -1,305 +1,34 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
+# Botfolio
 
-# Botfolio: paper-trading bots that have to beat a coin flip
+Botfolio watches company news, evaluates it with a configured AI provider and submits eligible orders to a dedicated Alpaca Paper account. All execution uses paper money.
 
-A fully automated, zero-subscription-cost research bot that **paper-trades** strategies on liquid US ETFs: **QQQ**
-(NASDAQ-100), **SPY** (S&P 500), **VGT** and **XLK** (US tech sector), **SOXX** (semiconductors) and **VUG**
-(large-cap growth). Each strategy runs in its own **$100,000 virtual account**. It measures
-whether a strategy has a statistically significant edge **after trading costs**, against:
-
-* an **inverse-signal** twin of every strategy (takes the exact opposite trade),
-* a **random-entry** baseline (same exits, same costs), and a 2,000-draw Monte-Carlo random-entry null,
-* **buy-and-hold**.
-
-Strategies: a long-only ETF **trend-filtered hold** (own the ETF above its 200-day average, cash below),
-intraday momentum from Zarattini, Aziz & Barbon (2024) in two independent implementations (`noise_mom`, and
-`noise_qqq` / `noise_spy`, the one with [a 10.9-year result](#intraday-momentum-the-strategy-that-does-make-money)), and the news/earnings event pipeline described
-[below](#news-and-earnings-research). Holding strategies receive **cash dividends** on each ex-date (net of an
-optional withholding tax), so they are compared with buy-and-hold on a total-return basis. Add your own in `src/botfolio/strategies/`.
-
-> **Paper trading only.** No code path can place a real-money order. See [Safety](#safety-no-live-trading).
-
----
-
-## Intraday momentum: the strategy that does make money
-
-`noise_qqq_1m` / `noise_spy_1m` implement the "noise area" breakout of Zarattini, Aziz & Barbon (2024),
-*Beat the Market: An Effective Intraday Momentum Strategy for S&P500 ETF (SPY)*, with the paper's parameters
-(14-session lookback, checks every 30 minutes) and no tuning on this data. The band around the open is the
-average absolute move from the open at that time of day over the last 14 sessions. Go long above the band, short
-below it, flat inside it (the band works as a trailing stop), and flat at the close. That is about one round
-trip a day, against 4–10 for the 1-minute patterns. Sizing is 100% of equity, with no leverage and no
-overnight risk. Definition: [docs/STRATEGIES.md](docs/STRATEGIES.md#intraday-momentum-noise-area).
-
-10.9 years of SIP data (2016-01-04 → 2026-11-13, 2.1M minute bars). This run predates the Australian settings: it
-used Alpaca's $0 commission, dividend-adjusted prices and no tax, so re-run it to see the after-tax numbers
-(`uv run botfolio --config config/momentum.yaml backtest --start 2016-01-01 --end 2026-11-13 --feed sip --no-mc`):
-
-| portfolio | trades | win % | PF | net %/trade | total return % | Sharpe | max DD % | p (t-test) |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| **noise_qqq_1m** | 2244 | 37.7 | 1.19 | 0.035 | **+108.4** | **0.84** | **10.5** | **0.004** |
-| noise_spy_1m | 2356 | 34.6 | 1.00 | 0.001 | +0.0 | 0.03 | 16.8 | 0.456 |
-| inv_noise_qqq_1m | 2247 | 54.6 | 0.60 | −0.088 | −86.5 | −2.10 | 86.5 | 1.0 |
-| random_1m | 9549 | 26.5 | 0.50 | −0.038 | −97.2 | −6.92 | 97.3 | 1.0 |
-| buy_hold_QQQ | — | — | — | — | +572.6 | 0.90 | 35.0 | — |
-
-`noise_qqq_1m` by calendar year (%): 2016 −2.4 · 2017 −0.5 · **2018 +29.8** · 2019 −2.1 · 2020 +8.0 · 2021 +3.8 ·
-**2022 +12.8** · 2023 +12.5 · 2024 +7.0 · 2025 +6.8 · 2026 (to Nov 13) +4.0. Sharpe was 0.88 for 2016–2023 and 0.73
-for 2024–2026.
-
-**What this says**
-
-1. **There is a real edge on QQQ, and it survives costs.** The gross edge is about 0.06% per trade, roughly 2× the
-   0.027% cost. The inverse twin loses heavily, which a signal with no information would not do.
-2. **It earns less than buy-and-hold but takes far less risk.** It returns about 7% a year against 19% for
-   buy-and-hold, at a similar Sharpe, with a third of the drawdown. It is flat every night, and it made money in
-   2018 and 2022 while QQQ fell. That makes it a diversifier, not a replacement for holding the index.
-3. **SPY breaks even.** Its gross edge (Sharpe ≈ 0.85 before costs) is about the size of its costs, so it is kept
-   only as a control. QQQ was already the stronger market in 2016–2023, so the QQQ choice does not depend on the
-   recent years.
-4. **The Monte-Carlo null is skipped.** That test models fixed stop/target exits, and this strategy uses neither, so
-   its verdict rests on the t-test plus the inverse and random controls.
-5. **Caveats.** This is a published strategy, and its edge may shrink now that it is public. Fills are simulated
-   (1 bp slippage plus half a 1-cent spread per side). Keep it on forward paper trading before trusting it:
-   `BOTFOLIO_MIRROR_STRATEGY=noise_qqq_1m uv run botfolio forward`.
-
----
-
-## Quick start (local)
-
-Requires [uv](https://docs.astral.sh/uv/) (`brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`)
-and free Alpaca **paper** API keys
-([dashboard → Paper → API keys](https://app.alpaca.markets/paper/dashboard/overview)). uv installs the right
-Python (3.12, pinned in `.python-version`) and the exact locked dependencies from `uv.lock`.
+## Run locally
 
 ```bash
-cp .env.example .env            # put ALPACA_KEY / ALPACA_SECRET (paper keys) in it
-uv sync                         # creates .venv with all deps (incl. dev tools)
-
-uv run botfolio check                                         # verifies paper account + market-data access
-uv run botfolio backtest --start 2025-11-17 --end 2026-11-13  # downloads + caches bars, prints the ranking
-uv run botfolio backtest --start 2025-11-17 --end 2026-11-13 --feed sip --run-id sip-1y
-uv run botfolio simulate --day 2026-11-13                     # local simulated execution test (see below)
-uv run botfolio forward                                       # forward paper trading, runs forever
-uv run botfolio dashboard                                     # http://localhost:8501
-uv run botfolio report [--run-id ID]                          # list runs / print a ranking
-uv run pytest                                                 # unit + integration tests
-uv run ruff check src tests && uv run mypy src             # lint + type check
+cp .env.example .env
+uv sync
+uv run botfolio check
+uv run botfolio events watch
 ```
 
-On a Mac, keep it awake while forward trading with `caffeinate -i uv run botfolio forward`. US regular hours
-(09:30–16:00 ET) are overnight in Australia/Asia.
+Add your Alpaca Paper credentials and AI provider settings to `.env` before starting the worker. For Clairic, set `EVENT_AI_PROVIDER=clairic`, `EVENT_AI_MODEL=clairic` and the Cloudflare Workers AI endpoint and token in `EVENT_AI_URL` and `EVENT_AI_KEY`. Set `EVENT_AI_EXPERIMENT` to a new ID when changing provider, model, endpoint or prompt so decisions remain auditable.
 
-`botfolio backtest --synthetic …` runs on a random-walk dataset with no network access. Every strategy *must*
-lose about its costs there; a "winning" strategy on synthetic data would reveal look-ahead bias.
+In another terminal, run `uv run botfolio dashboard` and open <http://127.0.0.1:8501>. The **Paper trading** page shows the worker status and order journal, edits the news watchlist, and provides entry and emergency-stop controls. **News & AI** shows saved evidence and decisions. Use `uv run botfolio events decision-stats` for a summary of those decisions.
 
-### Configuration
+## Execution
 
-* `config/default.yaml`: symbols, timeframes, strategy roster and parameters, cost model, risk limits,
-  exit rules, seed. `config/low_cost.yaml` is the optimistic-cost sensitivity scenario
-  (`uv run botfolio --config config/low_cost.yaml backtest …`).
-* Environment variables (`.env`): `ALPACA_KEY`, `ALPACA_SECRET` (or `APCA_API_KEY_ID`,
-  `APCA_API_SECRET_KEY`); optional `BOTFOLIO_DB_PATH`, `BOTFOLIO_CONFIG`, `BOTFOLIO_LOG_LEVEL`, `BOTFOLIO_LOG_JSON`,
-  `BOTFOLIO_DATA_FEED` (`iex`|`sip`), `BOTFOLIO_SYMBOLS`, `BOTFOLIO_MIRROR_STRATEGY`.
-  Secrets never go in YAML and are never logged.
+- Entry begins paused. Set `EVENT_PAPER_ENABLED=true` and `EVENT_EXCLUSIVE_ACCOUNT=true` on both the worker and control room. Confirm the dedicated paper account and arm entries in the control room after the worker checks in.
+- The worker scores fresh watchlist news with market data available at receipt. Clairic needs a supported directional `BUY` or `SELL` before a signal can reach the order checks. Issuer RSS is available in the news audit.
+- Entries require a fresh quote and the regular Nasdaq session. The worker submits a limit order with a stop and profit target. The entry window ends five minutes before close. The default exit timer is 15 minutes and is shortened as needed to begin closing two minutes before the session closes.
+- **Pause new entries** keeps the execution monitor managing existing positions. **Emergency stop** also asks the monitor to cancel its orders and close its positions during regular hours.
+- SQLite stores the watchlist, arm state, journal, and decision audit. Use the same `BOTFOLIO_DB_PATH` and `EVENT_KILL_FILE` for both processes. The existing database is compatible, including an existing armed state.
 
-Key defaults, identical for **every** portfolio:
+The worker is supervised separately from the dashboard. `uv run botfolio health` checks its news heartbeat. The control room also shows the independent execution monitor status. Paper results do not establish profitability.
 
-| | |
-|---|---|
-| capital | $100,000 per strategy |
-| sizing | risk 0.5% of equity per trade (stop distance), max 100% notional (no leverage) |
-| risk limits | ≤ 2 open positions, ≤ 10 trades/day, stop opening trades after −2% on the day |
-| stop | the strategy's own invalidation level, clamped to [0.5, 3] × ATR(14); ATR × 1.5 if none |
-| target | 2R · time stop 60 bars · flat at the close · no entries in the last 15 min |
-| costs | half of a 1¢ spread + 1 bp slippage per market order, +2 bp on stops, SEC + FINRA TAF fees on sells, Interactive Brokers (AU) commission US$0.005/share, US$1 minimum |
-| tax | Australian resident at 32% (30% bracket + Medicare): realised gains taxed each 1 Jul–30 Jun year, 50% CGT discount on longs held > 12 months, losses offset gains then carry forward; dividends taxed at 32% with the 15% US withholding credited. Equity is shown after tax owed so far; unrealised gains are untaxed |
-| dividends | prices are split-adjusted only; cash dividends (Alpaca corporate actions) are credited to longs held over the ex-date, minus `dividend_withholding_pct`, and charged to shorts |
-| ETF fees | expense ratios are already deducted from the ETF's price, so they need no separate charge |
+## Deploy
 
-## How it works
+The systemd units in `deploy/` assume a checkout at `~/botfolio`. Use `botfolio-events.service` for the worker and `botfolio-dashboard.service` for the control room. Set `BOTFOLIO_DASHBOARD_PASSWORD` before sharing the control room outside a trusted local connection. Docker Compose runs the same worker and control room with shared state under `./data`.
 
-```
-Alpaca REST (IEX/SIP 1-min bars) ──► SQLite bar cache ──► session filter (NYSE calendar)
-                                                              │
-               ┌──────────────────────── Engine (same code for backtest & forward) ─────────────────┐
-               │ 1m bar ─► 5m aggregator ─► strategies (signal at bar close)                        │
-               │        └► portfolios: fill queued orders at NEXT bar open, then stops/targets/time │
-               └─────────────────────────────────────────────────────────────────────────────────────┘
-                     │ trades, signals, daily equity, engine snapshot
-                     ▼
-                  SQLite ──► analysis (metrics, t-test, bootstrap, Monte-Carlo null, BH-FDR) ──► Streamlit
-```
+Run `./restart.sh` to restart the systemd paper worker and the installed dashboards. For React changes, build the web app before restarting.
 
-* **No look-ahead / no repainting.** Signals are computed from completed bars only and filled at the
-  **next** 1-minute bar's open. 5-minute bars are only emitted once complete. `tests/test_no_lookahead.py` re-runs every strategy on
-  truncated histories and requires identical past signals.
-* **Realistic fills.** Gaps through a stop fill at the open. When a bar touches both stop and target, the
-  stop is assumed first. Targets are limit orders that need price to trade *through* them. Exits are
-  checked on 1-minute bars even for 5-minute strategies.
-* **Market hours.** Only regular-session bars (09:30–16:00 ET) are used. Holidays and early closes come
-  from `pandas-market-calendars` (XNYS). Intraday positions are flattened on the session's final bar.
-* **Backtest = forward.** `tests/test_engine_live.py` proves the polling forward runner produces exactly
-  the same trades as the backtester for a session.
-
-Exact strategy definitions are in **[docs/STRATEGIES.md](docs/STRATEGIES.md)**.
-
-### Statistics
-
-For every non-benchmark portfolio:
-
-* **Metrics**: win rate, profit factor, average gross/net return per trade, average cost, expectancy (R),
-  total return, Sharpe and Sortino (daily, annualised, rf = 0), max drawdown.
-* **t-test**: one-sided, per-trade net return > 0, plus a 95% bootstrap CI.
-* **Random-entry Monte-Carlo** (`montecarlo.py`): 2,000 portfolios of K random entry times (same K, long
-  fraction, median stop in ATRs, reward/risk, costs and session filters). p = share of random portfolios
-  that did at least as well. A vectorised exit simulator is verified against the event-driven portfolio
-  in `tests/test_montecarlo.py`.
-* **Benjamini–Hochberg FDR** over all tested strategies (q-values).
-* **Verdict** `significant edge` = ≥ 30 trades and q < 0.05 on both the t-test and the random-entry test.
-
-## Dashboard
-
-`botfolio dashboard` (or the `dashboard` container) shows the following for any run (backtest, simulation or forward):
-KPIs; a **ranking table** (win rate, profit factor, Sharpe, max DD, p/q-values, verdict); net return per
-trade for strategy vs inverse vs random; **equity and drawdown curves**; a **significance chart** (bootstrap
-CI vs the random-entry band); **executed trades** with CSV export; and **live status** (heartbeat,
-mark-to-market equity, latest signals). The "How to read this" tab explains every number.
-
-## Web UI (React)
-
-`web/` is a React + TypeScript app built with [Vite+](https://viteplus.dev) and charted with TradingView
-[lightweight-charts](https://github.com/tradingview/lightweight-charts). `botfolio web` serves the built app and
-a read-only JSON API (`/api/*`, `src/botfolio/webapi.py`). It cannot place orders or change settings.
-
-* **Overview**: return and drawdown curves after costs and tax (buy-and-hold dashed, same colour per ETF),
-  and a sortable ranking that also toggles chart lines.
-* **Chart**: candles (1m to 1D) with the selected portfolio's entries and exits marked.
-* **Trades**: filterable trade log with CSV export. **Live**: forward-bot health, open positions, live
-  equity and tax accrued this financial year.
-
-```bash
-cd web && npm install && npm run build && cd ..   # build once after changing web/
-uv run botfolio web                                # http://127.0.0.1:8600
-cd web && npm run dev                              # hot-reload UI on :5173, proxies /api to :8600
-```
-
-On the VPS it runs as the `botfolio-web` user service (`deploy/botfolio-web.service`) and is published to the
-tailnet only with `sudo tailscale serve --bg --https=8443 http://127.0.0.1:8600` (port 8443 because nginx owns 443
-on this host).
-
-## Forward paper trading & crash recovery
-
-`botfolio forward` polls Alpaca once a minute (10 s after the minute closes), processes only completed bars,
-and persists trades, signals, equity, a heartbeat and a **pickled engine snapshot** to SQLite after every
-cycle.
-
-* **On a fresh start** it warms indicators on the previous 3 sessions, then starts all
-  portfolios from clean capital (warm-up trades are discarded).
-* **After a crash or restart** it restores the snapshot and catches up on missed minutes (up to 7 days).
-  Duplicate bars are ignored, and trade IDs are deterministic, so nothing is double-counted.
-  `botfolio simulate` replays a real session minute by minute, kills the runner midway, recovers it, and checks
-  the result is **identical** to an uninterrupted run.
-* If the code or config changes incompatibly, the snapshot is discarded and the run restarts with fresh
-  portfolios.
-* Docker's `restart: unless-stopped` plus a heartbeat **health check** handle process crashes.
-
-**Optional Alpaca paper mirror:** set `BOTFOLIO_MIRROR_STRATEGY=noise_qqq_1m` (any portfolio name) to also send that
-one portfolio's entries and exits as market orders to your Alpaca **paper** account, so you can watch them in
-Alpaca's UI. Only one portfolio can be mirrored, because one Alpaca account cannot hold many independent books.
-The local simulation remains the source of truth for all statistics.
-
-## Deploy on an Ubuntu VPS (Docker Compose)
-
-```bash
-# once: install Docker Engine + compose plugin (https://docs.docker.com/engine/install/ubuntu/)
-git clone <your repo> botfolio && cd botfolio
-cp .env.example .env && nano .env              # paper keys
-mkdir -p data && sudo chown 1000:1000 data     # containers run as uid 1000
-docker compose up -d --build                   # starts bot + dashboard
-docker compose logs -f bot                     # structured JSON logs
-docker compose ps                              # health status
-
-# historical backtest inside the stack (results appear in the dashboard):
-docker compose run --rm backtest botfolio backtest --start 2025-11-17 --end 2026-11-13
-
-# dashboard is bound to 127.0.0.1 - open it through an SSH tunnel:
-ssh -L 8501:localhost:8501 user@your-vps   # then browse http://localhost:8501
-```
-
-All state lives in `./data/botfolio.sqlite` (back it up with `sqlite3 data/botfolio.sqlite ".backup b.sqlite"`).
-The container clock is UTC; market hours come from the exchange calendar, so the VPS timezone does not
-matter. A 1 vCPU / 1 GB VPS is enough.
-
-## Safety: no live trading
-
-1. The only trading endpoint is the hard-coded constant `https://paper-api.alpaca.markets`. It is not
-   configurable, and every trading request is checked against it (`safety.assert_paper_url`).
-2. Before any order, the account returned by Alpaca must be a **paper account** (number starts with `PA`).
-   Live keys fail this check (`safety.assert_paper_account`).
-3. Startup aborts if `APCA_API_BASE_URL`/`ALPACA_BASE_URL` point anywhere else, or if `ALPACA_PAPER=false`.
-4. By default **no orders are sent at all**. Every strategy trades a local virtual portfolio, and Alpaca
-   is used only for market data.
-5. Tests cover all of the above, including that a live-account response blocks the order before any POST.
-
-## Limitations (read before trusting any number)
-
-* **Alpaca's free data is IEX-only in real time.** IEX carries roughly 2–3% of US equity volume, so its
-  1-minute candles differ from the consolidated tape: wicks are smaller, there are occasional missing
-  minutes (handled), and volume is not representative (no strategy uses volume). Historical **SIP** data is
-  free except for the most recent 15 minutes, so backtests can use either (`--feed sip`); forward trading
-  must use IEX. 
-* **Fills are simulated.** The model has no queue position, partial fills or market impact, and uses a
-  fixed spread/slippage assumption. Short-borrow fees are ignored (intraday only, easy-to-borrow ETFs).
-  The SEC fee rate changes yearly; adjust `sec_fee_per_million`.
-* **Tax is a simplified Australian model** (`tax:` in the YAML). It assumes the investor is not a "share
-  trader" (whose gains are income with no CGT discount, and whose losses offset salary). It ignores tax
-  brackets moving with income, and pays tax at 30 June rather than at assessment. Buy-and-hold owes deferred
-  CGT if sold at the end. Accounts are in USD: AUD/USD moves and FX conversion fees (IBKR ≈ 0.002%, most
-  AU platforms ≈ 0.5–0.7% each way) are not modelled. Idle cash earns 0%, which
-  understates a trend filter that would park cash in a T-bill ETF.
-* **Bar-level ambiguity.** Intrabar order is unknown, so a bar that touches both stop and target is
-  counted as a loss (conservative).
-* **Tuning many variants on the same data will produce false positives**, so judge only by q-values and
-  out-of-sample (forward) results.
-* **One year is one market regime.** Run longer periods (Alpaca history goes back to 2016) and keep the
-  forward loop running.
-* The random-entry null uses the strategy's median stop size, while real strategies vary their stops, so
-  the verdict requires **both** the t-test and the random-entry test to pass.
-
-## Project layout
-
-```
-src/botfolio/
-  config.py safety.py logging_setup.py storage.py cli.py
-  data/        models, NYSE calendar, Alpaca client, cached loader, 1m→5m aggregator, synthetic data
-  indicators.py  streaming Wilder ATR
-  strategies/  trend.py (ETF trend hold), momentum.py + noise_area.py (two intraday momentum
-               implementations), baselines.py (random, buy-and-hold, inverse)
-  events/      news/earnings ingestion, AI decisions, replay, paper execution
-  execution/   costs.py, portfolio.py
-  engine.py backtest.py live.py simulate.py
-  metrics.py montecarlo.py analysis.py
-dashboard/app.py   Streamlit UI
-tests/             indicators, aggregation, no-look-ahead, portfolio, Monte Carlo,
-                   safety, persistence, crash recovery, backtest/live equivalence
-```
-
-Tooling: `ruff check src tests` and `mypy src` both pass cleanly.
-
-## News and earnings research
-
-`botfolio events` adds immutable event ingestion, configurable structured AI decisions, conservative
-minute-bar replay with paired random controls, optional LightGBM walk-forward evaluation and guarded
-paper execution. See [setup, scientific limits and commands](docs/EVENT_RESEARCH.md).
-Paper execution starts disabled. This pipeline has not demonstrated a profitable edge.
-
-The dashboard opens on **Start here**, with connection checks, a news collection button and a
-practice demo that needs no credentials. Use **News & AI** for readable article assessments,
-**Results** for explained comparisons, and **Help** for a glossary. Detailed statistics and database
-settings remain available under **Advanced research**. Dashboard controls do not submit orders.
-
-**Paper trading** now shows the market session, execution-monitor health, entry pause/enable,
-emergency stop, editable news watchlist and broker journal. Entries require fresh news, an eligible
-AI hypothesis, risk checks and both the Nasdaq calendar and Alpaca clock to be open. Restartable VPS
-user services are provided in `deploy/`; see the operational update in [the event guide](docs/EVENT_RESEARCH.md).
+A read-only React dashboard shows Alpaca account equity, orders, positions and live prices. Its Node server connects to Alpaca Paper and uses `botfolio web` for local worker status. [React dashboard setup](web/README.md)

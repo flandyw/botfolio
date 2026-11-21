@@ -1,5 +1,5 @@
 [Unit]
-Description=Trading research dashboard on Tailscale (no application password)
+Description=Paper trading dashboard on Tailscale (no application password)
 StartLimitIntervalSec=0
 
 [Service]

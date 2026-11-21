@@ -6,8 +6,7 @@ Defence in depth:
 3. ``assert_paper_account`` verifies the account returned by Alpaca is a paper account
    (paper account numbers start with "PA") before any order is ever submitted.
 4. Environment variables that commonly switch SDKs to live trading cause a hard failure.
-5. By default no orders are sent to Alpaca at all: every strategy trades a local virtual portfolio.
-   Alpaca is used for market data only unless BOTFOLIO_MIRROR_STRATEGY is set.
+5. Paper entries require explicit deployment settings and an armed control-room switch.
 """
 
 from __future__ import annotations

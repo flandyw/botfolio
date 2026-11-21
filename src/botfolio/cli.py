@@ -1,203 +1,81 @@
-"""Command-line entry point: ``botfolio {check,backtest,forward,simulate,report,dashboard}``."""
+"""Commands for the Alpaca Paper worker and its dashboards."""
 
 from __future__ import annotations
 
 import argparse
-import logging
 import os
 import subprocess
 import sys
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
-import pandas as pd
 from dotenv import load_dotenv
 
-from botfolio.analysis import ranking_table
-from botfolio.config import AppConfig, load_config, load_credentials
+from botfolio.config import load_config, load_credentials
 from botfolio.data.alpaca import AlpacaClient
+from botfolio.events import cli as events
 from botfolio.logging_setup import setup_logging
 from botfolio.safety import check_environment
 from botfolio.storage import Storage
-
-log = logging.getLogger("botfolio")
-
-SUMMARY_COLS = ["rank", "group", "n_trades", "win_rate", "profit_factor", "avg_return_pct", "avg_cost_pct",
-                "total_return_pct", "sharpe", "max_drawdown_pct", "p_ttest", "p_mc", "q_mc", "verdict"]
-
-
-def print_summary(stats: dict) -> None:
-    df = ranking_table(stats)
-    if df.empty:
-        print("no results")
-        return
-    cols = [c for c in SUMMARY_COLS if c in df.columns]
-    with pd.option_context("display.max_rows", 200, "display.width", 250, "display.float_format", "{:,.3f}".format):
-        print(df[cols].to_string())
-
-
-def _client(required: bool = True) -> AlpacaClient | None:
-    creds = load_credentials(required=required)
-    return AlpacaClient(creds) if creds else None
-
-
-def cmd_check(cfg: AppConfig, args: argparse.Namespace) -> int:
-    client = _client()
-    assert client is not None
-    acct = client.get_paper_account()
-    print(f"paper account OK: {acct['account_number']} status={acct['status']} equity={acct['equity']}")
-    end = datetime.now(UTC) - timedelta(minutes=20)
-    df = client.get_bars(cfg.symbols, end - timedelta(days=5), end, "1Min", cfg.data.feed)
-    print(f"market data OK: {len(df)} 1m bars over the last 5 days (feed={cfg.data.feed})")
-    return 0
-
-
-def cmd_backtest(cfg: AppConfig, args: argparse.Namespace) -> int:
-    from botfolio.backtest import run_backtest
-    from botfolio.data.calendar import get_calendar
-    from botfolio.data.synthetic import random_walk_bars
-
-    storage = Storage(cfg.db_path)
-    start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
-    bars_df = None
-    client = None
-    if args.synthetic:
-        bars_df = random_walk_bars(get_calendar(cfg.session.calendar), cfg.symbols, start, end, seed=cfg.seed)
-    else:
-        client = _client()
-    run_id, stats = run_backtest(cfg, storage, client, start, end, args.run_id, bars_df, not args.no_mc,
-                                 notes="synthetic random walk" if args.synthetic else None)
-    print(f"\nrun_id: {run_id}\n")
-    print_summary(stats)
-    return 0
-
-
-def cmd_forward(cfg: AppConfig, args: argparse.Namespace) -> int:
-    from botfolio.live import LiveRunner, PaperMirror
-
-    client = _client()
-    assert client is not None
-    client.get_paper_account()  # verify keys + paper account up front
-    storage = Storage(cfg.db_path)
-
-    def fetch(symbols: list[str], start: datetime, end: datetime) -> pd.DataFrame:
-        return client.get_bars(symbols, start, end, "1Min", cfg.data.feed, cfg.data.adjustment)
-
-    runner = LiveRunner(cfg, storage, fetch, run_id=args.run_id or "forward", fetch_dividends=client.get_dividends)
-    if cfg.mirror_strategy:
-        runner.mirror = PaperMirror(client, cfg.mirror_strategy)
-    runner.start()
-    runner.run_forever()
-    return 0
-
-
-def cmd_simulate(cfg: AppConfig, args: argparse.Namespace) -> int:
-    from botfolio.simulate import run_simulation
-
-    client = None if args.synthetic else _client()
-    storage = Storage(cfg.db_path)
-    ok = run_simulation(cfg, storage, client, date.fromisoformat(args.day), synthetic=args.synthetic,
-                        crash_at_minute=args.crash_at)
-    return 0 if ok else 1
-
-
-def cmd_report(cfg: AppConfig, args: argparse.Namespace) -> int:
-    storage = Storage(cfg.db_path)
-    runs = storage.runs()
-    if args.run_id is None:
-        print(runs[["run_id", "mode", "created_at", "start", "end", "status", "notes"]].to_string(index=False))
-        return 0
-    stats = storage.stats(args.run_id)
-    print_summary(stats)
-    return 0
-
-
-def cmd_health(cfg: AppConfig, args: argparse.Namespace) -> int:
-    """Container health check: heartbeat must be recent (the loop writes one every poll)."""
-    meta = Storage(cfg.db_path).get_meta("heartbeat")
-    if not meta:
-        print("no heartbeat yet")
-        return 1
-    age = (datetime.now(UTC) - datetime.fromisoformat(meta[1])).total_seconds()
-    print(f"heartbeat age {age:.0f}s")
-    return 0 if age < args.max_age else 1
-
-
-def cmd_dashboard(cfg: AppConfig, args: argparse.Namespace) -> int:
-    app = next(p for p in (Path("dashboard/app.py"), Path(__file__).resolve().parents[2] / "dashboard" / "app.py")
-               if p.exists())
-    return subprocess.call([sys.executable, "-m", "streamlit", "run", str(app), "--server.port", str(args.port),
-                            "--server.address", args.address])
-
-
-def cmd_web(cfg: AppConfig, args: argparse.Namespace) -> int:
-    import uvicorn
-
-    from botfolio.webapi import create_app
-
-    uvicorn.run(create_app(cfg, _client(required=False)), host=args.host, port=args.port, log_level="warning")
-    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(os.environ.get("BOTFOLIO_ENV_FILE", ".env"))
     check_environment()
-    p = argparse.ArgumentParser(prog="botfolio", description="Paper-trading research bot for intraday strategies")
-    p.add_argument("--config", help="YAML config path (default config/default.yaml or $BOTFOLIO_CONFIG)")
-    p.add_argument("--db", help="SQLite path (default $BOTFOLIO_DB_PATH or data/botfolio.sqlite)")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    parser = argparse.ArgumentParser(prog="botfolio", description="News-driven Alpaca paper trading")
+    parser.add_argument("--config", help="YAML config path (defaults to config/default.yaml or BOTFOLIO_CONFIG)")
+    parser.add_argument("--db", help="SQLite path (defaults to data/botfolio.sqlite or BOTFOLIO_DB_PATH)")
+    sub = parser.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("check", help="verify paper credentials and market-data access")
+    sub.add_parser("check", help="verify the Alpaca paper account")
+    health = sub.add_parser("health", help="exit 0 when the paper worker heartbeat is recent")
+    health.add_argument("--max-age", type=int, default=900)
+    dashboard = sub.add_parser("dashboard", help="launch the paper trading control room")
+    dashboard.add_argument("--port", type=int, default=8501)
+    dashboard.add_argument("--address", default="127.0.0.1")
+    web = sub.add_parser("web", help="serve the read-only dashboard and paper worker status API")
+    web.add_argument("--port", type=int, default=8600)
+    web.add_argument("--host", default="127.0.0.1")
+    events.parser(sub)
 
-    b = sub.add_parser("backtest", help="run a historical backtest")
-    b.add_argument("--start", required=True)
-    b.add_argument("--end", required=True)
-    b.add_argument("--run-id")
-    b.add_argument("--feed", choices=["iex", "sip"])
-    b.add_argument("--no-mc", action="store_true", help="skip the random-entry Monte-Carlo test")
-    b.add_argument("--synthetic", action="store_true", help="use a random-walk dataset (offline sanity check)")
-
-    f = sub.add_parser("forward", help="forward paper trading loop (runs forever)")
-    f.add_argument("--run-id")
-
-    s = sub.add_parser("simulate", help="replay one session minute-by-minute through the live runner")
-    s.add_argument("--day", required=True, help="session date to replay, YYYY-MM-DD")
-    s.add_argument("--synthetic", action="store_true")
-    s.add_argument("--crash-at", type=int, default=120, help="simulate a crash after N minutes (0=never)")
-
-    r = sub.add_parser("report", help="list runs or print a run's ranking")
-    r.add_argument("--run-id")
-
-    h = sub.add_parser("health", help="exit 0 if the forward loop heartbeat is recent")
-    h.add_argument("--max-age", type=int, default=900, help="seconds")
-
-    d = sub.add_parser("dashboard", help="launch the Streamlit dashboard")
-    d.add_argument("--port", type=int, default=8501)
-    d.add_argument("--address", default="0.0.0.0")
-
-    w = sub.add_parser("web", help="serve the React web UI and its read-only JSON API")
-    w.add_argument("--port", type=int, default=8600)
-    w.add_argument("--host", default="127.0.0.1")
-
-    from botfolio.events.cli import command as event_command
-    from botfolio.events.cli import parser as event_parser
-    event_parser(sub)
-
-    args = p.parse_args(argv)
+    args = parser.parse_args(argv)
     cfg = load_config(args.config)
-    updates: dict = {}
     if args.db:
-        updates["db_path"] = args.db
-    if getattr(args, "feed", None):
-        updates["data"] = cfg.data.model_copy(update={"feed": args.feed})
-    if updates:
-        cfg = cfg.model_copy(update=updates)
-    setup_logging(cfg.log_level, cfg.log_json and args.cmd in {"forward", "events"})
-    handlers = {"check": cmd_check, "backtest": cmd_backtest, "forward": cmd_forward, "simulate": cmd_simulate,
-                "report": cmd_report, "health": cmd_health, "dashboard": cmd_dashboard, "web": cmd_web,
-                "events": event_command}
-    return handlers[args.cmd](cfg, args)
+        cfg = cfg.model_copy(update={"db_path": args.db})
+    setup_logging(cfg.log_level, cfg.log_json and args.cmd == "events")
 
+    if args.cmd == "events":
+        return events.command(cfg, args)
+    if args.cmd == "check":
+        creds = load_credentials()
+        assert creds is not None
+        account = AlpacaClient(creds).get_paper_account()
+        print(f"paper account OK: {account['account_number']} status={account['status']}")
+        return 0
+    if args.cmd == "health":
+        storage = Storage(cfg.db_path)
+        try:
+            heartbeat = storage.get("event-heartbeat")
+        finally:
+            storage.close()
+        if not heartbeat:
+            print("no paper worker heartbeat yet")
+            return 1
+        age = (datetime.now(UTC) - datetime.fromisoformat(heartbeat)).total_seconds()
+        print(f"paper worker heartbeat age {age:.0f}s")
+        return 0 if 0 <= age < args.max_age else 1
+    if args.cmd == "dashboard":
+        app = next(p for p in (Path("dashboard/app.py"), Path(__file__).resolve().parents[2] / "dashboard" / "app.py")
+                   if p.exists())
+        env = {**os.environ, "BOTFOLIO_DB_PATH": cfg.db_path}
+        if args.config:
+            env["BOTFOLIO_CONFIG"] = args.config
+        return subprocess.call([sys.executable, "-m", "streamlit", "run", str(app), "--server.port", str(args.port),
+                                "--server.address", args.address], env=env)
 
-if __name__ == "__main__":
-    sys.exit(main())
+    import uvicorn
+
+    from botfolio.webapi import create_app
+
+    uvicorn.run(create_app(cfg), host=args.host, port=args.port, log_level="warning")
+    return 0

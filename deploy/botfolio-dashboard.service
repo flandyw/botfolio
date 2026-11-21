@@ -1,5 +1,5 @@
 [Unit]
-Description=Password-protected trading research dashboard
+Description=Password-protected paper trading dashboard
 StartLimitIntervalSec=60
 StartLimitBurst=5
 

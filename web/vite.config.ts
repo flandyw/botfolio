@@ -1,4 +1,6 @@
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import { fileURLToPath } from "node:url";
 import { defineConfig, lazyPlugins, type Plugin } from "vite-plus";
 import { createAlpacaBridge } from "./server/alpaca-bridge.ts";
 
@@ -47,6 +49,7 @@ export default defineConfig({
       },
     ],
   },
-  plugins: [alpacaBridgePlugin(), ...(lazyPlugins(() => [react()]) ?? [])],
+  plugins: [alpacaBridgePlugin(), tailwindcss(), ...(lazyPlugins(() => [react()]) ?? [])],
+  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   server: { proxy: { "/api": "http://127.0.0.1:8600" } },
 });

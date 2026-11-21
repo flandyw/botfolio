@@ -1,32 +1,18 @@
-# React + TypeScript + Vite
+# Read-only paper dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Run the worker status API from the repository root.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+uv run botfolio web
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Run the dashboard from `web/`.
+
+```bash
+npm ci
+npm run dev
+```
+
+For a built dashboard, run `npm run build` and `npm run server` from `web/`, then open <http://127.0.0.1:8601>. The Node server uses the paper credentials in the repository's `.env` and proxies worker status to port 8600. Set `BOTFOLIO_API_URL` for a different worker status API address.
+
+Use the Streamlit control room to edit the watchlist, arm or pause orders, and trigger an emergency stop.

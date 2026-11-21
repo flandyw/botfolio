@@ -1,4 +1,4 @@
-"""Event commands share the existing configuration, credentials, bar cache and SQLite file."""
+"""News ingestion and paper execution commands."""
 from __future__ import annotations
 
 import asyncio
@@ -7,90 +7,32 @@ import json
 import logging
 import os
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from botfolio.config import load_credentials
 from botfolio.data.alpaca import AlpacaClient
 from botfolio.data.calendar import frame_to_bars, get_calendar
-from botfolio.data.loader import load_history
 from botfolio.events.ai import AI, analyze
-from botfolio.events.models import Event
+from botfolio.events.context import market_context
 from botfolio.events.paper import PaperExecutor, configured, event_is_fresh
 from botfolio.events.providers import ISSUER_FEEDS, AlpacaNews, IssuerNews, SECFilings
-from botfolio.events.research import market_context, replay
 from botfolio.events.store import EventStore
 from botfolio.storage import Storage
 
 log = logging.getLogger(__name__)
 
 
-def timestamp(value):
-    ts = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if ts.tzinfo is None:
-        raise ValueError("timestamp must include timezone")
-    return ts
-
-
 def command(cfg, args):
     storage = Storage(cfg.db_path)
-    store = EventStore(storage)
-    if args.event_cmd == "import":
-        events = [Event.model_validate_json(line) for line in Path(args.path).read_text().splitlines() if line.strip()]
-        print(json.dumps({"inserted": sum(store.add(e) for e in events), "rows": len(events)}))
-    elif args.event_cmd == "report":
-        print(store.reports().to_json(orient="records"))
-    elif args.event_cmd == "decision-stats":
-        print(store.decision_stats().to_json(orient="records", indent=2))
-    elif args.event_cmd == "ml":
-        import pandas as pd
-
-        from botfolio.events.ml import walk_forward
-        Path(args.output).write_text(json.dumps(walk_forward(pd.read_csv(args.path)), indent=2, allow_nan=False))
-    elif args.event_cmd == "watch":
-        Path(cfg.db_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(cfg.db_path + ".events.lock", "w") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            asyncio.run(watch(cfg, store, args.experiment, args.once))
-    elif args.event_cmd == "replay":
-        if args.run_id in set(store.reports().run_id) or args.run_id + "-technical" in set(storage.runs().run_id):
-            raise ValueError("run id already exists; use a new id to preserve prior research")
-        start, end = timestamp(args.start), timestamp(args.end)
-        train_end, validation_end = timestamp(args.train_end), timestamp(args.validation_end)
-        if not start < train_end < validation_end < end:
-            raise ValueError("require start < train-end < validation-end < end")
-        events = [e for e in store.events() if start <= e.content_at < end]
-        symbols = sorted({e.ticker for e in events} | {"SPY"})
-        client = None if args.cached else AlpacaClient(load_credentials())
-        bars_df = load_history(client, storage, get_calendar(), symbols,
-            (start-timedelta(days=7)).date(), (end+timedelta(days=4)).date(), cfg.data.feed, cfg.data.adjustment)
-        bars = frame_to_bars(bars_df, get_calendar())
-        ai = AI()
-        for event in events:
-            # Unverified historical articles must never be fed to the model for replay.
-            try:
-                at = event.available_at
-            except ValueError:
-                continue
-            analyze(store, event, args.experiment, ai, market_context(bars, event, at))
-        decisions = {e.key: store.decision(e.key, args.experiment) for e in events}
-        decisions = {k: v for k, v in decisions.items() if v is not None}
-        report = replay(events, decisions, bars_df, train_end=train_end, validation_end=validation_end,
-                        latency=args.latency, costs=cfg.costs, seed=cfg.seed)
-        from botfolio.backtest import run_backtest
-        from botfolio.config import RiskConfig
-
-        comparison_cfg = cfg.model_copy(update={"symbols": symbols, "risk": RiskConfig(
-            starting_capital=10000, risk_per_trade_pct=.25, daily_loss_limit_pct=1,
-            max_position_pct=25, max_gross_exposure_pct=100, max_open_positions=1)})
-        comparison_id, _ = run_backtest(comparison_cfg, storage, client, start.date(), end.date(),
-            run_id=args.run_id + "-technical", bars_df=bars_df[(bars_df.ts >= start) & (bars_df.ts < end)],
-            monte_carlo=False, notes="Technical/random/buy-and-hold comparison; full-period exposure differs from event replay")
-        report["technical_comparison_run"] = comparison_id
-        report["experiment"] = args.experiment
-        report["source_events"] = len(events)
-        store.research(args.run_id, report)
-        Path(args.output).write_text(json.dumps(report, indent=2, allow_nan=False))
-        print(f"Saved {len(report['trades'])} trade/control rows and {len(report['exclusions'])} exclusions to {args.output}")
+    try:
+        store = EventStore(storage)
+        if args.event_cmd == "decision-stats":
+            print(store.decision_stats().to_json(orient="records", indent=2))
+        else:
+            with open(cfg.db_path + ".events.lock", "w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                asyncio.run(watch(cfg, store, args.experiment, args.once))
+    finally:
+        storage.close()
     return 0
 
 
@@ -186,21 +128,9 @@ async def watch(cfg, store, experiment, once=False):
 
 
 def parser(sub):
-    event = sub.add_parser("events", help="auditable news/filing research and optional paper execution")
+    event = sub.add_parser("events", help="watch news and run the paper trader")
     commands = event.add_subparsers(dest="event_cmd", required=True)
-    imp = commands.add_parser("import", help="import provenance-checked JSONL snapshots")
-    imp.add_argument("path")
-    commands.add_parser("report")
     commands.add_parser("decision-stats", help="summarize saved AI decisions by experiment, model and source")
-    watch_parser = commands.add_parser("watch")
-    watch_parser.add_argument("--experiment", required=True)
+    watch_parser = commands.add_parser("watch", help="run the news and execution monitors")
+    watch_parser.add_argument("--experiment", default=os.getenv("EVENT_AI_EXPERIMENT") or "clairic-v1")
     watch_parser.add_argument("--once", action="store_true")
-    ml = commands.add_parser("ml")
-    ml.add_argument("path")
-    ml.add_argument("--output", default="event-ml.json")
-    research = commands.add_parser("replay")
-    for arg in ("start", "end", "train-end", "validation-end", "experiment", "run-id"):
-        research.add_argument("--"+arg, required=True)
-    research.add_argument("--latency", type=float, default=30)
-    research.add_argument("--cached", action="store_true")
-    research.add_argument("--output", default="event-research.json")

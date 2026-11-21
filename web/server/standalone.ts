@@ -1,7 +1,7 @@
 /**
  * Standalone Node server for Botfolio web UI:
  * - Serves `/api/alpaca/*` via `@alpacahq/alpaca-trade-api` (paper-only, read-only)
- * - Proxies `/api/*` (SQLite runs, stats, equity, trades, live, bars) to `botfolio web`
+ * - Proxies `/api/*` (paper worker status and watchlist) to `botfolio web`
  * - Serves the built SPA from `web/dist`
  *
  * Usage: `npm run server` (after `npm run build`)

@@ -1,6 +1,6 @@
-"""Alpaca market-data (and optional paper-trading) REST client.
+"""Alpaca market-data (and paper-account) REST client.
 
-Free "Basic" market data limitations (documented in README):
+Free "Basic" market data limitations:
 * Real-time/latest data is IEX-only (~2-3% of consolidated volume), so bars can differ from the
   consolidated tape and may skip quiet minutes.
 * Historical SIP bars are available on the free plan except for the most recent 15 minutes.
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -118,43 +118,9 @@ class AlpacaClient:
             df = df.drop_duplicates(["symbol", "ts"]).sort_values(["ts", "symbol"]).reset_index(drop=True)
         return df
 
-    def get_dividends(self, symbols: list[str], start: date, end: date) -> dict[tuple[str, date], float]:
-        """Cash dividend per share keyed by (symbol, ex-date), for ex-dates in [start, end]."""
-        url = f"{MARKET_DATA_URL}/v1/corporate-actions"
-        params: dict[str, Any] = {"symbols": ",".join(symbols), "types": "cash_dividend",
-                                  "start": start.isoformat(), "end": end.isoformat(), "limit": 1000}
-        out: dict[tuple[str, date], float] = {}
-        while True:
-            data = self._request("GET", url, params=params) or {}
-            for d in (data.get("corporate_actions") or {}).get("cash_dividends") or []:
-                key = (d["symbol"], date.fromisoformat(d["ex_date"]))
-                out[key] = out.get(key, 0.0) + float(d["rate"])  # a special and a regular can share an ex-date
-            token = data.get("next_page_token")
-            if not token:
-                return out
-            params["page_token"] = token
-
-    # --------------------------------------------------------- paper trading
     def get_paper_account(self) -> dict[str, Any]:
         url = f"{PAPER_TRADING_URL}/v2/account"
         assert_paper_url(url)
         acct = self._request("GET", url)
         assert_paper_account(acct)
         return acct
-
-    def submit_paper_order(self, symbol: str, qty: int, side: str, client_order_id: str) -> dict[str, Any]:
-        """Submit a market order to the PAPER endpoint only. Verifies paper account first."""
-        if side not in {"buy", "sell"} or qty <= 0:
-            raise ValueError("invalid order")
-        self.get_paper_account()  # raises LiveTradingForbidden if not paper
-        url = f"{PAPER_TRADING_URL}/v2/orders"
-        assert_paper_url(url)
-        body = {
-            "symbol": symbol,
-            "qty": str(qty),
-            "side": side,
-            "type": "market",
-            "time_in_force": "day",
-            "client_order_id": client_order_id[:48],
-        }
-        return self._request("POST", url, json=body)

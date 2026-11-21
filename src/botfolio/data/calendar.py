@@ -69,27 +69,6 @@ class MarketCalendar:
     def is_open(self, ts: datetime) -> bool:
         return self.session_for(ts) is not None
 
-    def annotate(self, bar: Bar) -> Bar | None:
-        """Attach session fields; returns None for bars outside regular trading hours."""
-        s = self.session_for(bar.ts)
-        if s is None:
-            return None
-        end = bar.ts + timedelta(minutes=bar.timeframe)
-        return Bar(
-            symbol=bar.symbol,
-            ts=bar.ts,
-            open=bar.open,
-            high=bar.high,
-            low=bar.low,
-            close=bar.close,
-            volume=bar.volume,
-            timeframe=bar.timeframe,
-            session=s.day,
-            minute_of_session=int((bar.ts - s.open).total_seconds() // 60),
-            minutes_to_close=int((s.close - end).total_seconds() // 60),
-            is_last=end >= s.close,
-        )
-
 
 def ny_date(ts: datetime) -> date:
     """Calendar date in New York for a tz-aware instant."""
@@ -102,24 +81,20 @@ def get_calendar(name: str = "XNYS") -> MarketCalendar:
 
 
 def frame_to_bars(df: pd.DataFrame, calendar: MarketCalendar) -> list[Bar]:
-    """Convert a DataFrame (symbol, ts, open, high, low, close, volume) into session-annotated 1m bars,
-    dropping extended-hours bars. Output is sorted by (ts, symbol)."""
+    """Return regular-session minute bars in timestamp and symbol order."""
     if df.empty:
         return []
-    df = df.sort_values(["ts", "symbol"])
     out: list[Bar] = []
-    for row in df.itertuples(index=False):
-        b = calendar.annotate(
-            Bar(
+    for row in df.sort_values(["ts", "symbol"]).itertuples(index=False):
+        ts = pd.Timestamp(row.ts).to_pydatetime()
+        if calendar.session_for(ts):
+            out.append(Bar(
                 symbol=str(row.symbol),
-                ts=pd.Timestamp(row.ts).to_pydatetime(),
+                ts=ts,
                 open=float(row.open),
                 high=float(row.high),
                 low=float(row.low),
                 close=float(row.close),
                 volume=float(row.volume),
-            )
-        )
-        if b is not None:
-            out.append(b)
+            ))
     return out

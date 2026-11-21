@@ -18,9 +18,6 @@ CREATE TABLE IF NOT EXISTS event_decisions (
  latency REAL NOT NULL, cost REAL, completed_at TEXT NOT NULL,
  PRIMARY KEY(event_key, experiment)
 );
-CREATE TABLE IF NOT EXISTS event_research (
- run_id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS event_experiments (
  experiment TEXT PRIMARY KEY, config TEXT NOT NULL
 );
@@ -66,15 +63,6 @@ class EventStore:
             conn.execute("INSERT OR IGNORE INTO event_decisions VALUES (?,?,?,?,?,?,?,?,?)", (
                 event.key, experiment, model, decision.model_dump_json(), json.dumps(request),
                 json.dumps(response), latency, cost, datetime.now(UTC).isoformat()))
-
-    def research(self, run_id, payload):
-        with self.storage.tx() as conn:
-            conn.execute("INSERT INTO event_research VALUES (?,?,?)", (
-                run_id, json.dumps(payload, allow_nan=False), datetime.now(UTC).isoformat()))
-
-    def reports(self):
-        with self.storage.tx() as conn:
-            return pd.read_sql_query("SELECT * FROM event_research ORDER BY created_at DESC", conn)
 
     def audit(self):
         with self.storage.tx() as conn:

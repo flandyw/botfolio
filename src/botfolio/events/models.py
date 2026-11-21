@@ -44,13 +44,6 @@ class Event(BaseModel):
         return hashlib.sha256(json.dumps([self.source, self.source_id, self.ticker,
             self.content_at.astimezone(UTC).isoformat(), self.text]).encode()).hexdigest()
 
-    @property
-    def available_at(self) -> datetime:
-        if self.mode == "historical":
-            if not self.snapshot_verified:
-                raise ValueError("historical replay requires a verified timestamped content snapshot")
-            return self.content_at
-        return self.received_at
 
 
 class Decision(BaseModel):

@@ -1,5 +1,5 @@
 [Unit]
-Description=Trading research news and paper execution supervisor
+Description=Botfolio news and paper execution supervisor
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
@@ -8,8 +8,7 @@ Type=simple
 WorkingDirectory=%h/botfolio
 EnvironmentFile=%h/botfolio/.env
 Environment=PYTHONUNBUFFERED=1
-Environment=EVENT_AI_EXPERIMENT=events-v3
-ExecStart=%h/botfolio/.venv/bin/python -m botfolio events watch --experiment ${EVENT_AI_EXPERIMENT}
+ExecStart=%h/botfolio/.venv/bin/python -m botfolio events watch
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

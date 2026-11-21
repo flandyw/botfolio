@@ -1,1 +1,1 @@
-"""Auditable event research; broker execution remains paper-only."""
+"""News decisions, audit records and paper execution."""
