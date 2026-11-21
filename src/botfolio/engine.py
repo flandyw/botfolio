@@ -27,7 +27,7 @@ from botfolio.strategies.base import Signal, Strategy
 
 log = logging.getLogger(__name__)
 
-ENGINE_STATE_VERSION = 4
+ENGINE_STATE_VERSION = 5  # bump whenever pickled engine/portfolio/strategy state changes
 
 
 class EngineListener(Protocol):
@@ -54,7 +54,8 @@ class Engine:
         self.strategies = strategies
         costs = CostModel(cfg.costs)
         self.portfolios: dict[str, Portfolio] = {
-            s.name: Portfolio(s.name, s.timeframe, cfg.risk, cfg.exits, costs, cfg.tax) for s in strategies
+            s.name: Portfolio(s.name, s.timeframe, s.risk or cfg.risk, s.exits or cfg.exits, costs, cfg.tax)
+            for s in strategies
         }
         self.by_tf: dict[int, list[Strategy[Any]]] = defaultdict(list)
         for s in strategies:

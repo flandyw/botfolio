@@ -7,6 +7,24 @@ built from 1-minute bars, anchored to the 09:30 ET open, and emitted only once c
 
 Source: `src/botfolio/strategies/*`. Parameters live in `config/default.yaml`.
 
+## Intraday momentum (noise area)
+
+`noise_area` (`strategies/noise_area.py`, portfolios `noise_qqq_1m` / `noise_spy_1m`) is a second, independent
+implementation of Zarattini, Aziz & Barbon (2024) on 1-minute bars, alongside `noise_mom` below. It differs in
+sizing (full notional, no stop) and exits (flat inside the band, optional VWAP).
+
+* σ(m) = the mean, over the previous 14 sessions, of |close(m) / session open − 1| at minute-of-session *m*.
+* Upper band = max(open, previous close) × (1 + σ(m)); lower band = min(open, previous close) × (1 − σ(m)).
+* At the close of each bar that ends on a 30-minute boundary (10:00, 10:30, …, 15:30), the desired position is
+  long if close > upper band, short if close < lower band, and flat otherwise. A signal is emitted only when this
+  changes. Entries are `reverse` signals, so they flip an opposite position at the next open. A move back inside
+  the band is an `exit` signal, which closes at the next open.
+* `use_vwap: true` uses max(upper, VWAP) / min(lower, VWAP), as in the paper. It is off by default because forward
+  trading uses IEX volume.
+* The strategy has its own exit and risk overrides in the YAML: `stop_mode: none` (no stop or target),
+  `max_hold_bars: 390`, flat at the close, `sizing: notional` at 100% of equity, and ≤ 20 trades/day. It needs
+  15 prior sessions, which the forward runner replays at start-up.
+
 ## Exits and risk (shared defaults)
 
 * Stop distance = |signal close − structural stop|, clamped to [0.5, 3] × ATR, or 1.5 × ATR if the strategy

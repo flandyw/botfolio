@@ -122,8 +122,9 @@ class LiveRunner:
         engine = Engine(self.cfg, build_roster(self.cfg))
         now = self.clock()
         today = ny_date(now)
-        sessions = [s for s in self.cal.sessions_between(today - timedelta(days=2 * self.warmup_sessions + 7), today - timedelta(days=1))]
-        sessions = sessions[-self.warmup_sessions :]
+        n_warm = max([self.warmup_sessions, *(s.warmup_sessions for s in engine.strategies)])
+        sessions = self.cal.sessions_between(today - timedelta(days=2 * n_warm + 10), today - timedelta(days=1))
+        sessions = sessions[-n_warm:]
         if sessions:
             df = self.fetch_bars(self.cfg.symbols, sessions[0].open, sessions[-1].close)
             for bar in frame_to_bars(df, self.cal):
@@ -132,7 +133,7 @@ class LiveRunner:
             engine.drain()
         costs = next(iter(engine.portfolios.values())).costs if engine.portfolios else None
         for name, p in list(engine.portfolios.items()):
-            engine.portfolios[name] = Portfolio(name, p.timeframe, self.cfg.risk, self.cfg.exits, costs or p.costs, self.cfg.tax)
+            engine.portfolios[name] = Portfolio(name, p.timeframe, p.risk, p.exits, costs or p.costs, self.cfg.tax)
         # buy-and-hold strategies must buy again on the first forward bar
         for s in engine.strategies:
             if s.kind == "buy_hold":
@@ -206,7 +207,8 @@ class LiveRunner:
     def refresh_stats(self) -> dict[str, dict[str, Any]]:
         assert self.engine is not None
         stats = compute_stats(self.cfg, self.storage.trades(self.run_id), self.storage.equity(self.run_id),
-                              list(self.engine.portfolios))
+                              list(self.engine.portfolios),
+                              exits={n: p.exits for n, p in self.engine.portfolios.items()})
         self.storage.save_stats(self.run_id, stats)
         return stats
 

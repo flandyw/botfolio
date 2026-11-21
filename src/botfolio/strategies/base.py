@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, ClassVar, Generic, TypeVar
 
+from botfolio.config import ExitConfig, RiskConfig
 from botfolio.data.models import Bar
 from botfolio.indicators import WilderATR
 
@@ -27,6 +28,8 @@ class Signal:
     managed: bool = False  # strategy closes it with a side=0 signal: exact stop, no target, no time stop
     meta: dict[str, Any] = field(default_factory=dict)
     session: date | None = None  # trading session of the signal bar
+    exit: bool = False  # close the open position at the next open instead of entering
+    reverse: bool = False  # may close an opposite-side open position first, then enter
 
 
 @dataclass
@@ -49,6 +52,8 @@ class Strategy(ABC, Generic[S]):
     per_symbol: ClassVar[bool] = False  # one long-only portfolio per symbol, no inverse twin
     warmup_sessions: int = 16  # sessions of history live trading replays before going live
     defaults: ClassVar[dict[str, Any]] = {}
+    exits: ExitConfig | None = None  # per-strategy overrides; None -> the global config
+    risk: RiskConfig | None = None
 
     def __init__(
         self,
@@ -91,7 +96,16 @@ class Strategy(ABC, Generic[S]):
         base.atr.update(bar.high, bar.low, bar.close)
         return self.evaluate(base, st, bar, new_session)
 
-    def signal(self, base: BaseState, bar: Bar, side: int, stop: float | None = None, **meta: Any) -> Signal:
+    def signal(
+        self,
+        base: BaseState,
+        bar: Bar,
+        side: int,
+        stop: float | None = None,
+        exit: bool = False,
+        reverse: bool = False,
+        **meta: Any,
+    ) -> Signal:
         return Signal(
             strategy=self.name,
             symbol=bar.symbol,
@@ -102,4 +116,6 @@ class Strategy(ABC, Generic[S]):
             stop=stop,
             meta=meta,
             session=bar.session,
+            exit=exit,
+            reverse=reverse,
         )

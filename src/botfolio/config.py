@@ -46,12 +46,15 @@ class RiskConfig(BaseModel):
     max_trades_per_day: int = Field(10, ge=1)
     daily_loss_limit_pct: float = Field(2.0, gt=0, description="Stop opening trades for the day below this.")
     allow_short: bool = True
+    sizing: Literal["risk", "notional"] = Field(
+        "risk", description="risk: size so the stop loses risk_per_trade_pct; notional: max_position_pct of equity."
+    )
 
 
 class ExitConfig(BaseModel):
     """Stop-loss / take-profit rules applied identically to every pattern strategy."""
 
-    stop_mode: Literal["structure", "atr"] = "structure"
+    stop_mode: Literal["structure", "atr", "none"] = "structure"  # none: no stop/target, strategy exits
     atr_period: int = Field(14, ge=2)
     atr_stop_mult: float = Field(1.5, gt=0, description="Stop distance in ATRs when stop_mode=atr.")
     min_stop_atr: float = Field(0.5, gt=0, description="Structure stops are clamped to [min, max] ATR.")
@@ -81,6 +84,9 @@ class StrategySpec(BaseModel):
     timeframes: list[int] = Field(default_factory=lambda: [1, 5])
     params: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+    symbols: list[str] | None = Field(None, description="Restrict to these symbols (default: all).")
+    exits: dict[str, Any] = Field(default_factory=dict, description="Per-strategy overrides of `exits`.")
+    risk: dict[str, Any] = Field(default_factory=dict, description="Per-strategy overrides of `risk`.")
 
 
 class AppConfig(BaseModel):

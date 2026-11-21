@@ -28,7 +28,8 @@ ACTIONS = {"WAIT": "Wait — no trade suggested", "HOLD": "Hold — no new trade
 GROUPS = {"pattern": "Chart strategy", "inverse": "Opposite-direction control", "random": "Random trading",
           "benchmark": "Buy and hold"}
 GROUP_COLORS = {"pattern": "#2a78d6", "inverse": "#eb6834", "random": "#8a8985", "benchmark": "#1baf7a"}
-STRATEGY_NAMES = {"noise_mom": "Intraday noise-band momentum", "random": "Random trading"}
+STRATEGY_NAMES = {"noise_mom": "Intraday noise-band momentum", "noise_qqq": "Noise-area momentum QQQ",
+                  "noise_spy": "Noise-area momentum SPY", "random": "Random trading"}
 
 
 def friendly(name):

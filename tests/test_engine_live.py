@@ -20,9 +20,13 @@ def test_backtest_end_to_end_and_persistence(cfg, rw_df):
                 == trades["exit_ts"].dt.tz_convert("America/New_York").dt.date)
     assert same_day.all()
     assert (trades["entry_ts"] <= trades["exit_ts"]).all()
-    for s in stats.values():
+    stop_mode = {s.name: (s.exits or cfg.exits).stop_mode for s in build_roster(cfg)}
+    for name, s in stats.items():
         if s["group"] != "benchmark" and s["n_trades"] >= 3:
-            assert 0 <= s["p_mc"] <= 1
+            if stop_mode[name] == "none":
+                assert "p_mc" not in s  # strategy-driven exits: no stop/target null model
+            else:
+                assert 0 <= s["p_mc"] <= 1
 
 
 def test_backtest_is_deterministic(cfg, rw_df):
@@ -72,9 +76,10 @@ def test_live_matches_backtest_trades(cfg, rw_df, cal):
 
     day = date(2026, 8, 19)
     live = _replay(cfg, Storage(":memory:"), rw_df, day, "sim", crash_at=0)
-    # backtest with the same warm-up procedure: 16 prior sessions, then fresh portfolios
-    sess = cal.sessions_between(day - timedelta(days=39), day - timedelta(days=1))[-16:]
+    # backtest with the same warm-up procedure: the longest strategy warm-up, then fresh portfolios
     e = Engine(cfg, build_roster(cfg))
+    n_warm = max([3, *(s.warmup_sessions for s in e.strategies)])
+    sess = cal.sessions_between(day - timedelta(days=2 * n_warm + 10), day - timedelta(days=1))[-n_warm:]
     bars = frame_to_bars(rw_df, cal)
     for b in bars:
         if sess[0].day <= b.session < day:
@@ -84,7 +89,7 @@ def test_live_matches_backtest_trades(cfg, rw_df, cal):
     from botfolio.execution.portfolio import Portfolio
 
     for n, p in list(e.portfolios.items()):
-        e.portfolios[n] = Portfolio(n, p.timeframe, cfg.risk, cfg.exits, p.costs, cfg.tax)
+        e.portfolios[n] = Portfolio(n, p.timeframe, p.risk, p.exits, p.costs, cfg.tax)
     for s in e.strategies:
         if s.kind == "buy_hold":
             s._states.clear()
@@ -95,3 +100,23 @@ def test_live_matches_backtest_trades(cfg, rw_df, cal):
     bt = sorted((t.trade_id, round(t.net_pnl, 6)) for t in e.drain().trades)
     lv = sorted(zip(live["trade_id"], live["net_pnl"].round(6), strict=True))
     assert bt == lv
+
+
+def test_per_strategy_starting_capital_is_rejected(cfg):
+    import pytest
+
+    from botfolio.config import StrategySpec
+
+    bad = cfg.model_copy(
+        update={"strategies": [StrategySpec(name="x", kind="noise_area", timeframes=[1], risk={"starting_capital": 1})]}
+    )
+    with pytest.raises(ValueError, match="starting_capital"):
+        build_roster(bad)
+
+
+def test_per_strategy_atr_period_reaches_strategy(cfg):
+    from botfolio.config import StrategySpec
+
+    spec = StrategySpec(name="x", kind="noise_area", timeframes=[1], exits={"atr_period": 7})
+    roster = build_roster(cfg.model_copy(update={"strategies": [spec]}))
+    assert {s.atr_period for s in roster if s.name.endswith("x_1m")} == {7}

@@ -47,3 +47,12 @@ def test_null_pvalue_is_calibrated_for_random_means(rw_bars):
     assert 0.2 < res_mean["p_mc"] < 0.8
     res_high = null.test(5.0, 100, 0.5, 1, 1.5, 2.0, 500, 1)
     assert res_high["p_mc"] < 0.01
+
+
+def test_null_uses_strategy_exits_and_symbols(rw_bars, cfg):
+    null = RandomEntryNull(rw_bars, cfg)
+    base_l, _ = null.outcomes(1, 1.5, 2.0)
+    short_l, _ = null.outcomes(1, 1.5, 2.0, cfg.exits.model_copy(update={"max_hold_bars": 1}))
+    assert len(short_l) == len(base_l) and not np.allclose(short_l, base_l)
+    none_l, _ = null.outcomes(1, 1.5, 2.0, symbols=["NOT_A_SYMBOL"])
+    assert len(none_l) == 0

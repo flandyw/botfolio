@@ -55,4 +55,19 @@ exits:                        # identical for every pattern strategy
 strategies:
   - {name: noise_mom, kind: noise_momentum,  timeframes: [1], params: {lookback: 14, band_mult: 1.0, interval: 30}}
   - {name: trend,     kind: trend_hold,      timeframes: [1], params: {sma_days: 200, band_pct: 1.0}}
+  # Intraday momentum ("noise area" breakout, Zarattini/Aziz/Barbon 2024): own exits + full-notional sizing
+  - name: noise_qqq
+    kind: noise_area
+    timeframes: [1]
+    symbols: [QQQ]
+    params: {lookback: 14, step: 30, use_vwap: false}
+    exits: {stop_mode: none, max_hold_bars: 390}
+    risk: {sizing: notional, max_position_pct: 100, max_trades_per_day: 20}
+  - name: noise_spy
+    kind: noise_area
+    timeframes: [1]
+    symbols: [SPY]
+    params: {lookback: 14, step: 30, use_vwap: false}
+    exits: {stop_mode: none, max_hold_bars: 390}
+    risk: {sizing: notional, max_position_pct: 100, max_trades_per_day: 20}
   - {name: random,    kind: random}

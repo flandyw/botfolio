@@ -12,11 +12,56 @@ whether a strategy has a statistically significant edge **after trading costs**,
 * **buy-and-hold**.
 
 Strategies: a long-only ETF **trend-filtered hold** (own the ETF above its 200-day average, cash below),
-intraday noise-band momentum (Zarattini, Aziz & Barbon, 2024), and the news/earnings event pipeline described
+intraday momentum from Zarattini, Aziz & Barbon (2024) in two independent implementations (`noise_mom`, and
+`noise_qqq` / `noise_spy`, the one with [a 10.9-year result](#intraday-momentum-the-strategy-that-does-make-money)), and the news/earnings event pipeline described
 [below](#news-and-earnings-research). Holding strategies receive **cash dividends** on each ex-date (net of an
 optional withholding tax), so they are compared with buy-and-hold on a total-return basis. Add your own in `src/botfolio/strategies/`.
 
 > **Paper trading only.** No code path can place a real-money order. See [Safety](#safety-no-live-trading).
+
+---
+
+## Intraday momentum: the strategy that does make money
+
+`noise_qqq_1m` / `noise_spy_1m` implement the "noise area" breakout of Zarattini, Aziz & Barbon (2024),
+*Beat the Market: An Effective Intraday Momentum Strategy for S&P500 ETF (SPY)*, with the paper's parameters
+(14-session lookback, checks every 30 minutes) and no tuning on this data. The band around the open is the
+average absolute move from the open at that time of day over the last 14 sessions. Go long above the band, short
+below it, flat inside it (the band works as a trailing stop), and flat at the close. That is about one round
+trip a day, against 4–10 for the 1-minute patterns. Sizing is 100% of equity, with no leverage and no
+overnight risk. Definition: [docs/STRATEGIES.md](docs/STRATEGIES.md#intraday-momentum-noise-area).
+
+10.9 years of SIP data (2016-01-04 → 2026-11-13, 2.1M minute bars). This run predates the Australian settings: it
+used Alpaca's $0 commission, dividend-adjusted prices and no tax, so re-run it to see the after-tax numbers
+(`uv run botfolio --config config/momentum.yaml backtest --start 2016-01-01 --end 2026-11-13 --feed sip --no-mc`):
+
+| portfolio | trades | win % | PF | net %/trade | total return % | Sharpe | max DD % | p (t-test) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **noise_qqq_1m** | 2244 | 37.7 | 1.19 | 0.035 | **+108.4** | **0.84** | **10.5** | **0.004** |
+| noise_spy_1m | 2356 | 34.6 | 1.00 | 0.001 | +0.0 | 0.03 | 16.8 | 0.456 |
+| inv_noise_qqq_1m | 2247 | 54.6 | 0.60 | −0.088 | −86.5 | −2.10 | 86.5 | 1.0 |
+| random_1m | 9549 | 26.5 | 0.50 | −0.038 | −97.2 | −6.92 | 97.3 | 1.0 |
+| buy_hold_QQQ | — | — | — | — | +572.6 | 0.90 | 35.0 | — |
+
+`noise_qqq_1m` by calendar year (%): 2016 −2.4 · 2017 −0.5 · **2018 +29.8** · 2019 −2.1 · 2020 +8.0 · 2021 +3.8 ·
+**2022 +12.8** · 2023 +12.5 · 2024 +7.0 · 2025 +6.8 · 2026 (to Nov 13) +4.0. Sharpe was 0.88 for 2016–2023 and 0.73
+for 2024–2026.
+
+**What this says**
+
+1. **There is a real edge on QQQ, and it survives costs.** The gross edge is about 0.06% per trade, roughly 2× the
+   0.027% cost. The inverse twin loses heavily, which a signal with no information would not do.
+2. **It earns less than buy-and-hold but takes far less risk.** It returns about 7% a year against 19% for
+   buy-and-hold, at a similar Sharpe, with a third of the drawdown. It is flat every night, and it made money in
+   2018 and 2022 while QQQ fell. That makes it a diversifier, not a replacement for holding the index.
+3. **SPY breaks even.** Its gross edge (Sharpe ≈ 0.85 before costs) is about the size of its costs, so it is kept
+   only as a control. QQQ was already the stronger market in 2016–2023, so the QQQ choice does not depend on the
+   recent years.
+4. **The Monte-Carlo null is skipped.** That test models fixed stop/target exits, and this strategy uses neither, so
+   its verdict rests on the t-test plus the inverse and random controls.
+5. **Caveats.** This is a published strategy, and its edge may shrink now that it is public. Fills are simulated
+   (1 bp slippage plus half a 1-cent spread per side). Keep it on forward paper trading before trusting it:
+   `BOTFOLIO_MIRROR_STRATEGY=noise_qqq_1m uv run botfolio forward`.
 
 ---
 
@@ -159,7 +204,7 @@ cycle.
   portfolios.
 * Docker's `restart: unless-stopped` plus a heartbeat **health check** handle process crashes.
 
-**Optional Alpaca paper mirror:** set `BOTFOLIO_MIRROR_STRATEGY=noise_mom_1m` (any portfolio name) to also send that
+**Optional Alpaca paper mirror:** set `BOTFOLIO_MIRROR_STRATEGY=noise_qqq_1m` (any portfolio name) to also send that
 one portfolio's entries and exits as market orders to your Alpaca **paper** account, so you can watch them in
 Alpaca's UI. Only one portfolio can be mirrored, because one Alpaca account cannot hold many independent books.
 The local simulation remains the source of truth for all statistics.
@@ -229,7 +274,8 @@ src/botfolio/
   config.py safety.py logging_setup.py storage.py cli.py
   data/        models, NYSE calendar, Alpaca client, cached loader, 1m→5m aggregator, synthetic data
   indicators.py  streaming Wilder ATR
-  strategies/  trend.py (ETF trend hold), momentum.py (noise-band momentum), baselines.py (random, buy-and-hold, inverse)
+  strategies/  trend.py (ETF trend hold), momentum.py + noise_area.py (two intraday momentum
+               implementations), baselines.py (random, buy-and-hold, inverse)
   events/      news/earnings ingestion, AI decisions, replay, paper execution
   execution/   costs.py, portfolio.py
   engine.py backtest.py live.py simulate.py

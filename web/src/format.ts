@@ -9,6 +9,8 @@ export const GROUPS: Record<Group, string> = {
 
 const NAMES: Record<string, string> = {
   noise_mom: "Noise-band momentum",
+  noise_qqq: "Noise-area momentum QQQ",
+  noise_spy: "Noise-area momentum SPY",
   random: "Random entries",
 };
 

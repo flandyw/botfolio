@@ -25,6 +25,8 @@ class InverseStrategy(Strategy[None]):
     def __init__(self, inner: Strategy[Any]) -> None:
         super().__init__(f"inv_{inner.name}", inner.timeframe, {}, inner.symbols, inner.atr_period)
         self.inner = inner
+        self.exits, self.risk = inner.exits, inner.risk
+        self.warmup_sessions = inner.warmup_sessions
 
     def new_state(self) -> None:
         return None
