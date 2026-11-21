@@ -73,6 +73,39 @@ export function Message({ error, children }: { error?: boolean; children: ReactN
   return <p className={cx("py-2 text-[13px]", error ? "text-down" : "text-dim")}>{children}</p>;
 }
 
+/** Rectangular text button. `primary` is the main action; `danger` is the emergency stop. */
+export function Button({
+  children,
+  onClick,
+  disabled,
+  kind,
+  type = "button",
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  kind?: "primary" | "danger";
+  type?: "button" | "submit";
+}) {
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      className={cx(
+        "border px-3 py-1.5 text-[13px] font-medium disabled:cursor-not-allowed disabled:border-hair disabled:bg-transparent disabled:text-faint",
+        kind === "primary"
+          ? "border-ink bg-ink text-bg hover:opacity-85"
+          : kind === "danger"
+            ? "border-down text-down hover:bg-down hover:text-bg"
+            : "border-rule hover:border-ink",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 export function SymbolLink({ symbol, onOpen }: { symbol: string; onOpen: (s: string) => void }) {
   return (
     <button

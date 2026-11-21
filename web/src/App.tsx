@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AlpacaSnapshotsResponse, AlpacaStatus, Config, Live } from "./api";
+import { type AlpacaSnapshotsResponse, type AlpacaStatus, type Config, type Live, savedPassword } from "./api";
 import { cx } from "./classes";
+import { Control } from "./Control";
 import { Desk } from "./Desk";
 import { ago, etDayTime, etTime } from "./format";
 import { Markets } from "./Markets";
+import { NewsAudit } from "./NewsAudit";
 import { Message } from "./ui";
+import { Unlock } from "./Unlock";
 import { useAlpacaStream } from "./useAlpacaStream";
 import { useApi } from "./useApi";
 
 type Theme = "dark" | "light";
-type Route = { view: "desk" | "markets"; symbol: string };
+const VIEWS = ["desk", "markets", "news", "control"] as const;
+type View = (typeof VIEWS)[number];
+type Route = { view: View; symbol: string };
 
 function initialTheme(): Theme {
   try {
@@ -21,7 +26,7 @@ function initialTheme(): Theme {
   return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-/** `#/markets/SPY` or `#/desk`; anything else is the desk. */
+/** `#/markets/SPY`, `#/news`, `#/control` or `#/desk`; anything else is the desk. */
 function readRoute(): Route {
   const [view, raw = ""] = location.hash.replace(/^#\/?/, "").split("/");
   let symbol = "";
@@ -30,7 +35,7 @@ function readRoute(): Route {
   } catch {
     // a malformed link opens the page without a symbol
   }
-  return { view: view === "markets" ? "markets" : "desk", symbol };
+  return { view: VIEWS.find((v) => v === view) ?? "desk", symbol: view === "markets" ? symbol : "" };
 }
 
 export default function App() {
@@ -80,6 +85,8 @@ export default function App() {
   const age = live.data?.heartbeat_age_s;
   const workerOk = age != null && age >= 0 && age < 120;
   const armed = Boolean(live.data?.enabled && live.data.armed);
+  const [unlocked, setUnlocked] = useState(() => Boolean(savedPassword()));
+  const locked = Boolean(config.data?.password_required) && !unlocked;
 
   return (
     <div className="mx-auto min-h-svh max-w-[1480px] px-4 md:px-8">
@@ -91,7 +98,9 @@ export default function App() {
           {(
             [
               ["desk", "Desk", "#/desk"],
-              ["markets", "Markets", `#/markets${route.symbol ? `/${route.symbol}` : ""}`],
+              ["markets", "Markets", "#/markets"],
+              ["news", "News", "#/news"],
+              ["control", "Control", "#/control"],
             ] as const
           ).map(([view, text, href]) => (
             <a
@@ -114,7 +123,9 @@ export default function App() {
               <span className={workerOk ? "text-dim" : "text-down"}>
                 {age == null ? "Worker not seen yet" : workerOk ? "Worker running" : `Worker silent, last seen ${ago(age)}`}
               </span>
-              <span className={armed ? "text-dim" : "text-warn"}>{armed ? "Entries armed" : "Entries paused"}</span>
+              <a href="#/control" className={cx("hover:underline", armed ? "text-dim" : "text-warn")}>
+                {live.data.stopped ? "Emergency stop active" : armed ? "Entries on" : "Entries off"}
+              </a>
             </>
           )}
           <button
@@ -130,7 +141,25 @@ export default function App() {
       <main className="py-6">
         {config.error && <Message error>{config.error}</Message>}
         {status.error && <Message error>{status.error}</Message>}
-        {route.view === "desk" ? (
+        {(route.view === "news" || route.view === "control") && locked ? (
+          <Unlock onUnlock={() => setUnlocked(true)} />
+        ) : route.view === "news" ? (
+          <NewsAudit onOpen={openSymbol} />
+        ) : route.view === "control" ? (
+          config.data ? (
+            <Control
+              live={live.data ?? null}
+              config={config.data}
+              onChange={() => {
+                live.reload();
+                config.reload();
+              }}
+              onOpen={openSymbol}
+            />
+          ) : (
+            <Message>Loading…</Message>
+          )
+        ) : route.view === "desk" ? (
           <Desk
             live={live.data ?? null}
             liveError={live.error ?? null}

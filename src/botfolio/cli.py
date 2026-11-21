@@ -1,13 +1,10 @@
-"""Commands for the Alpaca Paper worker and its dashboards."""
+"""Commands for the Alpaca Paper worker and its web dashboard."""
 
 from __future__ import annotations
 
 import argparse
 import os
-import subprocess
-import sys
 from datetime import UTC, datetime
-from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -30,10 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check", help="verify the Alpaca paper account")
     health = sub.add_parser("health", help="exit 0 when the paper worker heartbeat is recent")
     health.add_argument("--max-age", type=int, default=900)
-    dashboard = sub.add_parser("dashboard", help="launch the paper trading control room")
-    dashboard.add_argument("--port", type=int, default=8501)
-    dashboard.add_argument("--address", default="127.0.0.1")
-    web = sub.add_parser("web", help="serve the read-only dashboard and paper worker status API")
+    web = sub.add_parser("web", help="serve the web dashboard's API: worker status, controls, journal and news")
     web.add_argument("--port", type=int, default=8600)
     web.add_argument("--host", default="127.0.0.1")
     events.parser(sub)
@@ -64,14 +58,6 @@ def main(argv: list[str] | None = None) -> int:
         age = (datetime.now(UTC) - datetime.fromisoformat(heartbeat)).total_seconds()
         print(f"paper worker heartbeat age {age:.0f}s")
         return 0 if 0 <= age < args.max_age else 1
-    if args.cmd == "dashboard":
-        app = next(p for p in (Path("dashboard/app.py"), Path(__file__).resolve().parents[2] / "dashboard" / "app.py")
-                   if p.exists())
-        env = {**os.environ, "BOTFOLIO_DB_PATH": cfg.db_path}
-        if args.config:
-            env["BOTFOLIO_CONFIG"] = args.config
-        return subprocess.call([sys.executable, "-m", "streamlit", "run", str(app), "--server.port", str(args.port),
-                                "--server.address", args.address], env=env)
 
     import uvicorn
 

@@ -156,7 +156,7 @@ export function Desk({
               </Figure>
               <Figure label="New entries">
                 <span className={live.enabled && live.armed ? "" : "text-warn"}>
-                  {!live.enabled ? "Disabled in .env" : live.armed ? "Armed" : "Paused in the control room"}
+                  {live.stopped ? "Emergency stop" : !live.enabled ? "Disabled in .env" : live.armed ? "On" : "Off"}
                 </span>
               </Figure>
               <Figure label="Working orders and positions">
@@ -305,10 +305,6 @@ export function Desk({
         </div>
       )}
 
-      <p className="border-t border-rule pt-3 text-[13px] text-dim">
-        This page only reads. Arm, pause or stop the bot and edit the watchlist in the control room (
-        <code className="font-mono">botfolio dashboard</code>).
-      </p>
     </div>
   );
 }
