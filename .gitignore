@@ -1,4 +1,7 @@
 .env
+.env.*
+!.env.example
+node_modules/
 .venv/
 __pycache__/
 *.pyc
@@ -7,5 +10,11 @@ __pycache__/
 .ruff_cache/
 /data/
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 /logs/
