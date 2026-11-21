@@ -1,8 +1,8 @@
 import pandas as pd
 import pytest
 
-from ttbot.metrics import benjamini_hochberg, max_drawdown, sharpe, significance
-from ttbot.safety import LiveTradingForbidden, assert_paper_account, assert_paper_url, check_environment
+from botfolio.metrics import benjamini_hochberg, max_drawdown, sharpe, significance
+from botfolio.safety import LiveTradingForbidden, assert_paper_account, assert_paper_url, check_environment
 
 
 def test_max_drawdown():
@@ -55,8 +55,8 @@ def test_environment_guard(monkeypatch):
 
 
 def test_order_submission_blocked_for_live_account(monkeypatch):
-    from ttbot.config import Credentials
-    from ttbot.data.alpaca import AlpacaClient
+    from botfolio.config import Credentials
+    from botfolio.data.alpaca import AlpacaClient
 
     client = AlpacaClient(Credentials(key_id="AK_LIVE", secret_key="x"))
     calls = []

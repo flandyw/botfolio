@@ -1,0 +1,17 @@
+[Unit]
+Description=Botfolio web UI and read-only API (React build in web/dist), exposed via tailscale serve
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/botfolio
+EnvironmentFile=%h/botfolio/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/botfolio/.venv/bin/python -m botfolio web --host 127.0.0.1 --port 8600
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+
+[Install]
+WantedBy=default.target

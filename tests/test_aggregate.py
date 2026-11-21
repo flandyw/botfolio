@@ -1,6 +1,6 @@
 import pandas as pd
 
-from ttbot.data.aggregate import BarAggregator
+from botfolio.data.aggregate import BarAggregator
 
 
 def test_5m_aggregation_matches_pandas_resample(rw_bars):

@@ -1,5 +1,5 @@
-# ttbot default configuration. Credentials NEVER go here - use .env / environment variables.
-symbols: [QQQ, SPY]          # NASDAQ-100 and S&P 500 proxies
+# botfolio default configuration. Credentials NEVER go here - use .env / environment variables.
+symbols: [QQQ, SPY, VGT, XLK, SOXX, VUG]   # Nasdaq-100, S&P 500, IT sector x2, semiconductors, large-cap growth
 timeframes: [1, 5]           # minutes; every strategy runs on each listed timeframe
 seed: 42                     # drives the random baseline + Monte-Carlo test (reproducible)
 include_inverse: true        # add an inverse-signal twin for every pattern strategy
@@ -8,7 +8,7 @@ monte_carlo_iterations: 2000
 
 data:
   feed: iex                  # iex (free real-time) | sip (free historical only, >15 min old)
-  adjustment: all
+  adjustment: split          # split-adjusted only: dividends are paid as cash on the ex-date instead
   cache_bars: true
 
 session:
@@ -18,11 +18,18 @@ costs:
   half_spread_per_share: 0.005   # QQQ/SPY usually quote a 1-cent spread
   slippage_bps: 1.0              # applied to every market order
   stop_slippage_bps: 2.0         # extra slippage when a stop triggers
-  commission_per_share: 0.0      # Alpaca is commission-free for US equities
-  min_commission: 0.0
+  commission_per_share: 0.005    # Interactive Brokers (AU) Pro fixed: US$0.005/share, US$1 minimum
+  min_commission: 1.0
   sec_fee_per_million: 27.80     # SEC Section 31 (sells). Conservative; the rate is revised yearly
   finra_taf_per_share: 0.000166  # FINRA TAF (sells), capped
   finra_taf_max: 8.30
+  dividend_withholding_pct: 15    # US-Australia treaty rate with a W-8BEN; credited back as a foreign income tax offset
+
+tax:                          # Australian resident individual, settled each financial year (1 Jul - 30 Jun)
+  marginal_rate_pct: 32       # 30% bracket (A$45k-135k) + 2% Medicare levy; 18 / 39 / 47 for the other brackets
+  cgt_discount_pct: 50        # half of a gain is tax free on longs held more than 12 months (never on shorts)
+  discount_min_days: 365
+  fy_start_month: 7
 
 risk:                         # identical for every portfolio
   starting_capital: 100000
@@ -46,12 +53,6 @@ exits:                        # identical for every pattern strategy
   no_entry_last_minutes: 15
 
 strategies:
-  - {name: fvg,       kind: fvg,             params: {min_gap_atr: 0.25, min_body_atr: 0.5, expire_bars: 30}}
-  - {name: sweep,     kind: liquidity_sweep, params: {left: 5, right: 5, max_age: 120}}
-  - {name: ob,        kind: order_block,     params: {left: 3, right: 3, lookback: 10, expire_bars: 60}}
-  - {name: bos,       kind: structure,       params: {left: 3, right: 3, break_type: BOS}}
-  - {name: choch,     kind: structure,       params: {left: 3, right: 3, break_type: CHoCH}}
-  - {name: ema_9_21,  kind: ema_cross,       params: {fast: 9, slow: 21}}
-  - {name: rsi_div,   kind: rsi_divergence,  params: {rsi_period: 14, left: 3, right: 3, oversold: 40, overbought: 60}}
-  - {name: orb15,     kind: orb,             timeframes: [1, 5], params: {or_minutes: 15, stop: opposite}}
+  - {name: noise_mom, kind: noise_momentum,  timeframes: [1], params: {lookback: 14, band_mult: 1.0, interval: 30}}
+  - {name: trend,     kind: trend_hold,      timeframes: [1], params: {sma_days: 200, band_pct: 1.0}}
   - {name: random,    kind: random}

@@ -2,10 +2,10 @@ from datetime import timedelta
 
 import pytest
 
-from ttbot.config import CostConfig, ExitConfig, RiskConfig
-from ttbot.execution.costs import CostModel
-from ttbot.execution.portfolio import Portfolio
-from ttbot.strategies.base import Signal
+from botfolio.config import CostConfig, ExitConfig, RiskConfig
+from botfolio.execution.costs import CostModel
+from botfolio.execution.portfolio import Portfolio
+from botfolio.strategies.base import Signal
 
 from .conftest import make_bars
 

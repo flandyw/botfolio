@@ -1,21 +1,28 @@
 """Streamlit dashboard: rankings, equity curves, trades, significance and live status.
 
-Run with:  ttbot dashboard     (or: streamlit run dashboard/app.py)
+Run with:  botfolio dashboard     (or: streamlit run dashboard/app.py)
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import math
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from dotenv import load_dotenv
 
-from ttbot.analysis import compute_stats, ranking_table
-from ttbot.config import load_config
-from ttbot.storage import Storage
+from botfolio.analysis import compute_stats, ranking_table
+from botfolio.config import load_config
+from botfolio.dashboard_ui import PAGE_HINTS, PAGES, render_beginner_page
+from botfolio.events.store import EventStore
+from botfolio.storage import Storage
 
 # Reference categorical palette (fixed order, validated for colour-vision deficiency on adjacent pairs).
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
@@ -23,7 +30,7 @@ MUTED = "#8a8985"
 GRID = "rgba(128,128,128,0.18)"
 MAX_LINES = len(SERIES)
 
-st.set_page_config(page_title="TikTok Strategy Lab", page_icon="📉", layout="wide")
+st.set_page_config(page_title="Trading Research · Paper only", page_icon="📊", layout="wide")
 
 
 @st.cache_resource
@@ -49,18 +56,87 @@ def fmt_pct(x: float) -> str:
     return "–" if x is None or (isinstance(x, float) and math.isnan(x)) else f"{x:+.2f}%"
 
 
+load_dotenv(os.environ.get("BOTFOLIO_ENV_FILE", ".env"))
+dashboard_password = os.getenv("BOTFOLIO_DASHBOARD_PASSWORD", "")
+if dashboard_password:
+    password_hash = hashlib.sha256(dashboard_password.encode()).hexdigest()
+    if not hmac.compare_digest(st.session_state.get("_dashboard_login", ""), password_hash):
+        st.title("Sign in to Trading Research")
+        st.write("Enter the dashboard password to open your workspace.")
+        with st.form("dashboard_sign_in", clear_on_submit=True):
+            entered = st.text_input("Dashboard password", type="password")
+            submitted = st.form_submit_button("Sign in", type="primary")
+        if submitted:
+            if hmac.compare_digest(entered.encode(), dashboard_password.encode()):
+                st.session_state["_dashboard_login"] = password_hash
+                st.rerun()
+            else:
+                st.error("That password did not match. Please try again.")
+        st.stop()
+    if st.sidebar.button("Sign out"):
+        del st.session_state["_dashboard_login"]
+        st.rerun()
 cfg = load_config()
-db_path = st.sidebar.text_input("SQLite database", os.environ.get("TTBOT_DB_PATH", cfg.db_path))
+st.sidebar.title("Trading Research")
+st.sidebar.caption("Learn, collect news and test ideas with simulated money.")
+page = st.sidebar.radio("Explore", PAGES, captions=PAGE_HINTS)
+st.sidebar.info("🧪 Paper money only. Nothing here can trade real money.")
+if st.sidebar.button("Refresh page"):
+    st.rerun()
+db_path = st.session_state.get("dashboard_db", os.environ.get("BOTFOLIO_DB_PATH", cfg.db_path))
+if page == "Advanced research":
+    with st.sidebar.expander("Data settings"):
+        db_path = st.text_input("SQLite database", db_path, key="dashboard_db")
 storage = get_storage(db_path)
+event_store = EventStore(storage)
+if page != "Advanced research":
+    render_beginner_page(page, cfg, storage, event_store)
+    st.stop()
+
+st.sidebar.caption("Advanced research: detailed metrics and saved experiments.")
+if st.sidebar.checkbox("Show detailed news experiments"):
+    st.title("News and earnings research")
+    st.warning("Exploratory results. No demonstrated profitable edge. Historical AI may know later outcomes.")
+    reports = event_store.reports()
+    if not reports.empty:
+        selected = st.selectbox("Event run", reports.run_id)
+        payload = json.loads(reports.set_index("run_id").loc[selected, "payload"])
+        st.caption(payload["warning"])
+        if payload.get("technical_comparison_run"):
+            st.write("Technical/random/buy-and-hold comparison (full-period exposure differs from event replay)")
+            st.dataframe(pd.DataFrame(storage.stats(payload["technical_comparison_run"])).T)
+        st.dataframe(pd.DataFrame(payload["summaries"]).T, use_container_width=True)
+        event_trades = pd.DataFrame(payload["trades"])
+        if not event_trades.empty:
+            for field in ("event_type", "model", "sentiment", "hold", "split"):
+                st.write(f"Net P&L by {field}; strategies and paired controls shown separately")
+                st.dataframe(event_trades.groupby(["strategy", field]).net_pnl.agg(["count", "mean", "sum"]))
+            series = event_trades.copy()
+            series["portfolio"] = series.strategy + ":" + series.hold.astype(str) + ":" + series.split
+            series = series.sort_values("exit")
+            series["closed_pnl"] = series.groupby("portfolio").net_pnl.cumsum()
+            st.line_chart(series.pivot_table(index="exit", columns="portfolio", values="closed_pnl").ffill())
+            st.caption("Cumulative closed P&L; excludes unrealised drawdowns.")
+            st.dataframe(event_trades)
+        st.write("Exclusions", payload["exclusions"])
+    else:
+        st.info("No event replays saved yet.")
+    audit = event_store.audit()
+    if not audit.empty:
+        st.write("AI audit: latency, configured input-token cost, archived requests and responses")
+        st.dataframe(audit)
+    st.stop()
+
 runs = storage.runs()
 if runs.empty:
-    st.title("TikTok Strategy Lab")
-    st.info("No runs yet. Run a backtest first:  `ttbot backtest --start 2025-01-02 --end 2025-12-31`")
+    st.title("Botfolio")
+    st.info("No runs yet. Run a backtest first:  `botfolio backtest --start 2025-01-02 --end 2025-12-31`")
     st.stop()
 
 labels = {r.run_id: f"{r.run_id}  ·  {r.mode}  ·  {r.status}" for r in runs.itertuples()}
 run_id = st.sidebar.selectbox("Run", list(labels), format_func=lambda k: labels[k])
 run = runs.set_index("run_id").loc[run_id]
+starting_capital = json.loads(run["config"])["risk"]["starting_capital"]
 if st.sidebar.button("Refresh"):
     st.cache_data.clear()
     st.rerun()
@@ -79,7 +155,7 @@ tfs = st.sidebar.multiselect("Timeframes (min)", [1, 5], default=[1, 5])
 if not table.empty:
     table = table[table["group"].isin(sel_groups) & (table["timeframe"].isin(tfs) | (table["group"] == "benchmark"))]
 
-st.title("TikTok Strategy Lab")
+st.title("Botfolio")
 st.caption(
     f"Run **{run_id}** · mode `{run['mode']}` · {run['start']} → {run['end'] or 'now'} · {run['notes'] or ''}. "
     "Paper trading only. Every portfolio starts with identical capital and identical cost/risk rules."
@@ -180,7 +256,7 @@ with tab_eq:
             fig.add_trace(go.Scatter(x=t["exit_ts"], y=t["net_pnl"].cumsum(), name=name, mode="lines",
                                      line=dict(color=color, width=2, shape="hv")))
     if mode == "Daily equity":
-        fig.add_hline(y=cfg.risk.starting_capital, line_color=MUTED, line_dash="dot", line_width=1)
+        fig.add_hline(y=starting_capital, line_color=MUTED, line_dash="dot", line_width=1)
     _layout(fig, mode, "$")
     st.plotly_chart(fig, width="stretch")
 
@@ -268,7 +344,7 @@ with tab_live:
     live = storage.get(f"live_equity:{run_id}")
     if live:
         df = pd.DataFrame(sorted(live["equity"].items(), key=lambda kv: -kv[1]), columns=["portfolio", "equity"])
-        df["return %"] = (df["equity"] / cfg.risk.starting_capital - 1) * 100
+        df["return %"] = (df["equity"] / starting_capital - 1) * 100
         st.caption(f"Mark-to-market at {live['ts']}")
         st.dataframe(df, width="stretch", hide_index=True)
     sigs = storage.signals(run_id, 300)
@@ -276,4 +352,4 @@ with tab_live:
     st.dataframe(sigs.drop(columns=["run_id"]), width="stretch", height=360)
 
 with tab_help:
-    st.markdown(open(os.path.join(os.path.dirname(__file__), "HELP.md")).read())
+    st.markdown(Path(__file__).with_name("HELP.md").read_text())

@@ -5,10 +5,10 @@ from datetime import date, timedelta
 import pandas as pd
 import pytest
 
-from ttbot.config import AppConfig, load_config
-from ttbot.data.calendar import frame_to_bars, get_calendar
-from ttbot.data.models import Bar
-from ttbot.data.synthetic import random_walk_bars
+from botfolio.config import AppConfig, load_config
+from botfolio.data.calendar import frame_to_bars, get_calendar
+from botfolio.data.models import Bar
+from botfolio.data.synthetic import random_walk_bars
 
 DAY = date(2026, 9, 15)  # a regular Tuesday session
 
@@ -43,3 +43,18 @@ def rw_df(cal):
 @pytest.fixture(scope="session")
 def rw_bars(cal, rw_df):
     return frame_to_bars(rw_df, cal)
+
+
+@pytest.fixture(autouse=True)
+def isolate_external_services(monkeypatch, tmp_path):
+    """Tests must never load deployment keys or make external broker/model requests."""
+    monkeypatch.setenv("BOTFOLIO_ENV_FILE", str(tmp_path / "no-deployment-secrets.env"))
+    for name in ("ALPACA_KEY", "ALPACA_SECRET", "APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "EVENT_AI_KEY"):
+        monkeypatch.setenv(name, "")
+    monkeypatch.setenv("EVENT_AI_PROVIDER", "disabled")
+    monkeypatch.setenv("EVENT_AI_MODEL", "disabled")
+    monkeypatch.setenv("EVENT_PAPER_ENABLED", "false")
+    monkeypatch.setenv("EVENT_EXCLUSIVE_ACCOUNT", "false")
+    def blocked_request(*args, **kwargs):
+        raise AssertionError("External services must be mocked in tests")
+    monkeypatch.setattr("requests.sessions.Session.request", blocked_request)

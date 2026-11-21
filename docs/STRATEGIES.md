@@ -1,49 +1,57 @@
-# Strategy and pattern definitions
+# Strategy definitions
 
 Every definition is deterministic and causal. A signal is computed at the **close** of bar *t* using only
 bars ≤ *t*, and it is executed at the **open of the next 1-minute bar**. "ATR" is Wilder's ATR(14) on the
 strategy's own timeframe. Strategies run independently on 1-minute and 5-minute bars. 5-minute bars are
 built from 1-minute bars, anchored to the 09:30 ET open, and emitted only once complete.
 
-Source: `src/ttbot/patterns/*` and `src/ttbot/strategies/*`. Parameters live in `config/default.yaml`.
+Source: `src/botfolio/strategies/*`. Parameters live in `config/default.yaml`.
 
-## Building blocks
+## Exits and risk (shared defaults)
 
-### Swing points (fractal pivots), `patterns/swings.py`
-Bar *i* is a **swing high** if `high[i] > max(high[i-L .. i-1])` and `high[i] >= max(high[i+1 .. i+R])`.
-Swing lows mirror this. The pivot is **confirmed only at the close of bar i+R** and never changes. The rule
-is strict on the left and non-strict on the right, so ties go to the first bar.
-Defaults: L = R = 3 (structure, order blocks, RSI divergence), L = R = 5 (liquidity).
-
-### Market structure: BOS / CHoCH, `patterns/structure.py`
-The tracker keeps the latest confirmed, unbroken swing high and swing low.
-* A **bullish break** is the first bar whose **close** is above the active swing high (bearish mirrors).
-  Breaks are close-based; wicks don't count.
-* **CHoCH** is a break against the current trend (bullish break while the trend is bearish). Otherwise it is a
-  **BOS**; the first break of the series is a BOS. Each swing level can be broken only once.
-
-## Pattern strategies
-
-| name | entry rule (long; short mirrors) | structural stop |
-|---|---|---|
-| **fvg** (Fair Value Gap) | 3 consecutive same-session candles A, B, C with `low[C] > high[A]` form a gap `[high[A], low[C]]`. Requires a gap ≥ 0.25 ATR and a bullish displacement body on B ≥ 0.5 ATR. Enter on the first **later** bar (within 30 bars, same session) whose low trades into the gap (`low ≤ top`) while its close holds (`close ≥ bottom`). A close below the gap invalidates it. One trade per gap. | gap bottom |
-| **sweep** (liquidity sweep) | Liquidity = confirmed swing lows (≤ 5 kept, ≤ 120 bars old). A bar whose **low** pierces a swing low but whose **close** is back above it → long. A close below the level is a real break: the level is removed with no trade. | sweep bar's low |
-| **ob** (order block) | On a bullish structure break of swing S at bar k: the leg origin is the lowest-low bar in (S, k]. The OB is the **last bearish candle** at or before the origin (≤ 10 bars back), with zone `[low, high]`. Enter on the first later retest (`low ≤ top`, `close > bottom`) within 60 bars, same session. A close below the OB invalidates it. | OB bottom |
-| **bos** | Trade in the break direction at the close of a **BOS** bar | latest opposite swing |
-| **choch** | Trade in the break direction at the close of a **CHoCH** bar (trend reversal) | latest opposite swing |
-| **ema_9_21** | EMA(9) crosses above EMA(21) on a close: `sign(fast-slow)` goes from ≤ 0 to > 0. EMAs are seeded with an SMA. | none (1.5 ATR) |
-| **rsi_div** | Two consecutive confirmed swing lows P1, P2, 5–60 bars apart, with price `P2 < P1`, `RSI(P2) > RSI(P1)` and `RSI(P2) ≤ 40` (Wilder RSI 14 read at the pivot bars). Fires at P2's confirmation bar. | P2 low |
-| **orb15** | The opening range is the high/low of bars starting in the first 15 minutes. The first later bar that **closes** above the high → long (below the low → short). One trade per session. | opposite side of the range |
-
-FVG and order-block zones are cleared at each new session, so overnight gaps never count as imbalances.
-
-## Exits and risk (identical for every pattern)
-
-* Stop distance = |signal close − structural stop|, clamped to [0.5, 3] × ATR, or 1.5 × ATR if the pattern
+* Stop distance = |signal close − structural stop|, clamped to [0.5, 3] × ATR, or 1.5 × ATR if the strategy
   has no structural stop. The stop is placed that distance from the actual fill price.
 * Target = 2 × stop distance. Time stop = 60 bars of the strategy's timeframe. Flat at the session close.
 * Sizing: 0.5% of equity at risk, capped at 100% notional. ≤ 2 open positions, ≤ 10 trades/day, and no new
   trades after a −2% day. One position per symbol; signals arriving while in a position are ignored.
+
+## Holding strategy: ETF trend filter, `strategies/trend.py`
+
+**trend_SPY / trend_QQQ** hold one ETF each (one $100k portfolio per symbol, so each compares directly with
+`buy_hold_<symbol>`). It follows the 200-day / 10-month moving-average rule (Siegel; Faber 2007).
+
+* At the first bar of each session, take the previous session's close and the simple average of the last
+  `sma_days` (200) daily closes.
+* Own the ETF when the close is above `SMA × (1 + band)`, sit in cash below `SMA × (1 − band)`, and keep
+  the current state in between (`band_pct` 1%). The band cuts whipsaw round trips.
+* Until `sma_days` closes exist it stays invested, i.e. it is identical to buy-and-hold rather than
+  sitting in cash. Live trading replays `sma_days + 5` sessions at a fresh start so it is ready at once.
+* Fills at the next minute's open with the normal spread, slippage and sell-side fees. Positions are
+  `hold`: no stop, target, time stop or end-of-day flatten, so they collect dividends. No shorting, no
+  inverse twin.
+* Expected behaviour: it rarely beats buy-and-hold on return. Its purpose is to avoid most of a long
+  bear market. Each switch costs spread and slippage, and the time in cash forgoes dividends.
+
+## Dividends (all strategies)
+
+Prices are split-adjusted only. On each ex-date, a long held through the previous close receives the cash
+dividend minus `costs.dividend_withholding_pct`; a short pays it in full. Dividends count in the trade's
+gross and net P&L and in portfolio equity. Intraday strategies are flat overnight, so they never collect any.
+
+## Managed strategy: intraday noise-band momentum, `strategies/momentum.py`
+
+**noise_mom** follows Zarattini, Aziz & Barbon (2024), *Beat the Market: An Effective Intraday Momentum
+Strategy for S&P500 ETF (SPY)*. It has a published out-of-sample record.
+
+* At each 30-minute mark, `sigma` = mean of `|close / session open − 1|` at the same time of day over the
+  previous 14 sessions (today excluded). Noise area =
+  `[min(open, prev close) × (1 − sigma), max(open, prev close) × (1 + sigma)]`.
+* **Long** when the close is above the noise area and above session VWAP. **Short** mirrors.
+* **Exit** at the first 30-minute mark whose close is back inside `max(upper band, VWAP)` (long), otherwise
+  at the session close. No profit target and no time stop: the edge is in the few days that trend all day.
+* Hard stop = the far side of the noise area. It also sets the size (0.5% of equity at risk, ≤ 100% notional).
+* Its signals are `managed`: the shared 2R target / 60-bar time stop / ATR stop clamp do not apply. All other
+  risk limits and costs do.
 
 ## Controls
 

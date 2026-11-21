@@ -1,0 +1,18 @@
+[Unit]
+Description=Trading research news and paper execution supervisor
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/botfolio
+EnvironmentFile=%h/botfolio/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/botfolio/.venv/bin/python -m botfolio events watch --experiment clef-v2
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=default.target

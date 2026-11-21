@@ -1,10 +1,10 @@
 from datetime import date, timedelta
 
-from ttbot.backtest import run_backtest
-from ttbot.engine import Engine
-from ttbot.simulate import _replay
-from ttbot.storage import Storage
-from ttbot.strategies import build_roster
+from botfolio.backtest import run_backtest
+from botfolio.engine import Engine
+from botfolio.simulate import _replay
+from botfolio.storage import Storage
+from botfolio.strategies import build_roster
 
 
 def test_backtest_end_to_end_and_persistence(cfg, rw_df):
@@ -55,7 +55,7 @@ def test_live_runner_crash_recovery_matches_uninterrupted(cfg, rw_df):
     a = _replay(cfg, Storage(":memory:"), rw_df, day, "sim", crash_at=95)
     b = _replay(cfg, Storage(":memory:"), rw_df, day, "sim", crash_at=0)
     cols = ["trade_id", "net_pnl", "exit_reason"]
-    assert len(a) > 10
+    assert len(a) > 3  # only noise_mom + controls trade now
     assert a[cols].sort_values("trade_id").reset_index(drop=True).equals(
         b[cols].sort_values("trade_id").reset_index(drop=True))
 
@@ -68,12 +68,12 @@ def test_engine_ignores_duplicate_bars(cfg, rw_bars):
 
 def test_live_matches_backtest_trades(cfg, rw_df, cal):
     """Forward mode (polling, completed bars only) and backtest must produce the same trades for a session."""
-    from ttbot.data.calendar import frame_to_bars
+    from botfolio.data.calendar import frame_to_bars
 
     day = date(2026, 8, 19)
     live = _replay(cfg, Storage(":memory:"), rw_df, day, "sim", crash_at=0)
-    # backtest with the same warm-up procedure: 3 prior sessions, then fresh portfolios
-    sess = cal.sessions_between(day - timedelta(days=14), day - timedelta(days=1))[-3:]
+    # backtest with the same warm-up procedure: 16 prior sessions, then fresh portfolios
+    sess = cal.sessions_between(day - timedelta(days=39), day - timedelta(days=1))[-16:]
     e = Engine(cfg, build_roster(cfg))
     bars = frame_to_bars(rw_df, cal)
     for b in bars:
@@ -81,10 +81,10 @@ def test_live_matches_backtest_trades(cfg, rw_df, cal):
             e.process(b)
     e.end_session()
     e.drain()
-    from ttbot.execution.portfolio import Portfolio
+    from botfolio.execution.portfolio import Portfolio
 
     for n, p in list(e.portfolios.items()):
-        e.portfolios[n] = Portfolio(n, p.timeframe, cfg.risk, cfg.exits, p.costs)
+        e.portfolios[n] = Portfolio(n, p.timeframe, cfg.risk, cfg.exits, p.costs, cfg.tax)
     for s in e.strategies:
         if s.kind == "buy_hold":
             s._states.clear()

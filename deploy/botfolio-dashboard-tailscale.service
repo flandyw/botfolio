@@ -1,0 +1,17 @@
+[Unit]
+Description=Trading research dashboard on Tailscale (no application password)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/botfolio
+EnvironmentFile=%h/botfolio/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/env BOTFOLIO_DASHBOARD_PASSWORD= %h/botfolio/.venv/bin/python -m streamlit run dashboard/app.py --server.address=127.0.0.1 --server.port=8502 --browser.serverAddress=armvps.tail4832d.ts.net --browser.serverPort=80 --server.headless=true --browser.gatherUsageStats=false --server.enableStaticServing=false
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -3,17 +3,18 @@
 import numpy as np
 import pytest
 
-from ttbot.config import load_config
-from ttbot.execution.costs import CostModel
-from ttbot.execution.portfolio import Portfolio
-from ttbot.montecarlo import RandomEntryNull, build_arrays, eligible_entries, simulate_exits
-from ttbot.strategies.base import Signal
+from botfolio.config import load_config
+from botfolio.execution.costs import CostModel
+from botfolio.execution.portfolio import Portfolio
+from botfolio.montecarlo import RandomEntryNull, build_arrays, eligible_entries, simulate_exits
+from botfolio.strategies.base import Signal
 
 
 @pytest.mark.parametrize("tf", [1, 5])
 def test_vectorised_exits_match_portfolio(rw_bars, tf):
     cfg = load_config()
-    cfg = cfg.model_copy(update={"exits": cfg.exits.model_copy(update={"stop_mode": "atr", "atr_stop_mult": 1.2})})
+    cfg = cfg.model_copy(update={"exits": cfg.exits.model_copy(update={"stop_mode": "atr", "atr_stop_mult": 1.2}),
+                                 "costs": cfg.costs.model_copy(update={"min_commission": 0.0})})  # null ignores the minimum
     bars = [b for b in rw_bars if b.symbol == "SPY"]
     arrays = build_arrays(bars)["SPY"]
     idx, atr = eligible_entries(bars, tf, cfg.exits.atr_period, cfg.exits.no_entry_last_minutes)["SPY"]
