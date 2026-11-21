@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 
-from ttbot.config import AppConfig
+from ttbot.config import AppConfig, ExitConfig
 from ttbot.data.aggregate import BarAggregator
 from ttbot.data.models import Bar
 from ttbot.indicators import WilderATR
@@ -178,21 +178,29 @@ class RandomEntryNull:
         self.cfg = cfg
         self.bars = bars
         self.arrays = build_arrays(bars)
-        self._elig: dict[int, dict[str, tuple[np.ndarray, np.ndarray]]] = {}
+        self._elig: dict[tuple[int, int, int], dict[str, tuple[np.ndarray, np.ndarray]]] = {}
         self._out: dict[tuple[Any, ...], tuple[np.ndarray, np.ndarray]] = {}
 
-    def outcomes(self, tf: int, stop_atr: float, rr: float) -> tuple[np.ndarray, np.ndarray]:
+    def outcomes(
+        self,
+        tf: int,
+        stop_atr: float,
+        rr: float,
+        exits: ExitConfig | None = None,
+        symbols: list[str] | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        ex = exits or self.cfg.exits
         stop_atr, rr = round(stop_atr, 2), round(rr, 3)
-        key = (tf, stop_atr, rr)
+        syms = tuple(sorted(symbols)) if symbols is not None else None
+        ekey = (tf, ex.atr_period, ex.no_entry_last_minutes)
+        key = (*ekey, ex.max_hold_bars, stop_atr, rr, syms)
         if key not in self._out:
-            if tf not in self._elig:
-                self._elig[tf] = eligible_entries(
-                    self.bars, tf, self.cfg.exits.atr_period, self.cfg.exits.no_entry_last_minutes
-                )
-            hold = self.cfg.exits.max_hold_bars * tf
+            if ekey not in self._elig:
+                self._elig[ekey] = eligible_entries(self.bars, tf, ex.atr_period, ex.no_entry_last_minutes)
+            hold = ex.max_hold_bars * tf
             longs, shorts = [], []
-            for sym, (idx, atr) in self._elig[tf].items():
-                if len(idx) == 0:
+            for sym, (idx, atr) in self._elig[ekey].items():
+                if len(idx) == 0 or (syms is not None and sym not in syms):
                     continue
                 a = self.arrays[sym]
                 longs.append(simulate_exits(a, idx, atr, 1, stop_atr, rr, hold, self.cfg))
@@ -213,8 +221,10 @@ class RandomEntryNull:
         rr: float,
         iterations: int,
         seed: int,
+        exits: ExitConfig | None = None,
+        symbols: list[str] | None = None,
     ) -> dict[str, float]:
-        longs, shorts = self.outcomes(tf, stop_atr, rr)
+        longs, shorts = self.outcomes(tf, stop_atr, rr, exits, symbols)
         if n_trades < 3 or len(longs) == 0:
             return {"p_mc": float("nan"), "null_mean": float("nan"), "null_p05": float("nan"), "null_p95": float("nan")}
         rng = np.random.default_rng(seed)
