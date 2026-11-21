@@ -272,6 +272,10 @@ class PaperExecutor:
                     or (signal.fresh and not signal.fresh(execution_now))):
                 results[signal.key] = "entry checks took too long; fresh data required"
                 continue
+            blocked = self._blocked()  # a pause or emergency stop takes effect in the middle of a batch
+            if blocked:
+                results[signal.key] = blocked
+                continue
             limits = self.limits.get(signal.strategy)
             if limits is None or signal.direction not in (1, -1):
                 results[signal.key] = "unknown strategy or direction"

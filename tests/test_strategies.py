@@ -212,6 +212,22 @@ def test_paused_entries_reach_no_strategy(paper):
     assert not paper.client.posts
 
 
+def test_pause_during_a_batch_stops_the_remaining_orders(paper):
+    broker, request = paper.client, paper.client._request
+
+    def pause_after_first_order(method, url, **kw):
+        result = request(method, url, **kw)
+        if method == "POST":
+            paper.store.storage.put("event-paper-armed", False)
+        return result
+
+    broker._request = pause_after_first_order
+    signals = [Signal("momentum", f"momentum-{s}", s, 1, stop=100.0) for s in ("UP", "FLAT")]
+    assert paper.submit(signals, {"UP": quote(101.5), "FLAT": quote(101.5)}, NOW) == {
+        "momentum-UP": "submitted", "momentum-FLAT": "paper entries paused in dashboard"}
+    assert len(broker.posts) == 1
+
+
 class Data:
     def __init__(self):
         self.daily, self.today, self.asks = {"SPY": (100, 110), "TLT": (100, 90)}, TODAY, {}
