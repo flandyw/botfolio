@@ -2,7 +2,7 @@
 symbols: [
   # ETFs
   SPY, QQQ, IWM, DIA, VTI, VOO, VGT, XLK, SOXX, VUG, SMH, XLF, XLE, XLV, XLI, XLY, XLP, XLU, XLC, XLB,
-  XLRE, EFA, EEM, TLT, GLD,
+  XLRE, EFA, EEM, TLT, GLD, QQQM,
   # Technology
   AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, AVGO, AMD, NFLX, ORCL, CRM, ADBE, INTC, CSCO, QCOM, TXN, MU,
   AMAT, LRCX, KLAC, ASML, TSM, ARM, PLTR, SNOW, NOW, PANW, CRWD, SHOP, UBER, ABNB, PYPL, COIN, HOOD, SOFI,
@@ -17,7 +17,8 @@ symbols: [
   BA, CAT, DE, GE, HON, LMT, RTX, UPS, F, GM, RIVN, BABA, BKNG,
 ]
 # Watchlist symbols the trend strategy may hold overnight.
-etfs: [SPY, QQQ, IWM, DIA, VTI, VOO, VGT, XLK, SOXX, VUG, SMH, XLF, XLE, XLV, XLI, XLY, XLP, XLU, XLC, XLB,
+# SPY and QQQ are left to the momentum strategy, since a symbol has one owner: VOO and QQQM hold the same indexes.
+etfs: [QQQM, IWM, DIA, VTI, VOO, VGT, XLK, SOXX, VUG, SMH, XLF, XLE, XLV, XLI, XLY, XLP, XLU, XLC, XLB,
        XLRE, EFA, EEM, TLT, GLD]
 data:
   feed: iex
@@ -25,8 +26,8 @@ data:
 strategies:
   news:       # AI call on fresh news: bracket order, stop 1%, target 2R, timed exit
     {enabled: true, max_positions: 5, position_pct: 25, risk_pct: 1}
-  momentum:   # 30-minute noise-band breakout, long or short, stop at the far band, flat by the close
-    {enabled: true, max_positions: 5, position_pct: 10, risk_pct: 0.5, lookback: 14}
+  momentum:   # 30-minute noise-band breakout in `symbols`, long or short, stop at the far band, flat by the close
+    {enabled: true, symbols: [SPY, QQQ], max_positions: 2, position_pct: 25, risk_pct: 0.5, lookback: 14}
   etf_trend:  # hold each ETF above its 200-day average; allocation is split equally across `etfs`
     {enabled: true, allocation_pct: 50, sma_days: 200, band_pct: 1}
   etf_rotation:  # hold the `top` ETFs by 1/3/6/12-month momentum, each until it leaves the top `keep`

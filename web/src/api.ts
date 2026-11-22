@@ -84,6 +84,7 @@ export type StrategyConfig = {
   allocation_pct?: number;
   sma_days?: number;
   symbol?: string;
+  symbols?: string[];
 };
 
 /** An order or position the worker is managing, and the strategy that owns it. */

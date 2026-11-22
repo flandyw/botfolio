@@ -176,6 +176,10 @@ class StrategyRunner:
 
     def _momentum(self, now, session, symbols):
         cfg = self.cfg.strategies.momentum
+        if cfg.symbols:
+            symbols = [symbol for symbol in symbols if symbol in set(cfg.symbols)]
+            if not symbols:
+                return f"{', '.join(cfg.symbols)} not on the watchlist"
         slot = int((now - session.open - timedelta(seconds=20)) // SLOT)  # bars publish shortly after they end
         if slot < 1:
             return "waiting for the first 30-minute bar"

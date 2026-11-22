@@ -123,7 +123,8 @@ def create_app(cfg: AppConfig) -> Starlette:
             "strategies": storage.get("strategy-status") or {},
             "strategy_config": {
                 "news": {"enabled": cfg.strategies.news.enabled, **limits["news"]},
-                "momentum": {"enabled": cfg.strategies.momentum.enabled, **limits["momentum"]},
+                "momentum": {"enabled": cfg.strategies.momentum.enabled, **limits["momentum"],
+                             "symbols": cfg.strategies.momentum.symbols},
                 "etf_trend": {"enabled": cfg.strategies.etf_trend.enabled, **limits["etf_trend"],
                               "allocation_pct": cfg.strategies.etf_trend.allocation_pct,
                               "sma_days": cfg.strategies.etf_trend.sma_days},

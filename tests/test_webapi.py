@@ -40,7 +40,8 @@ def api(monkeypatch, tmp_path):
     monkeypatch.setenv("EVENT_PAPER_ENABLED", "true")
     monkeypatch.setenv("EVENT_EXCLUSIVE_ACCOUNT", "true")
     monkeypatch.setenv("EVENT_KILL_FILE", str(tmp_path / "KILL"))
-    cfg = AppConfig(db_path=str(tmp_path / "botfolio.sqlite"), symbols=load_config().symbols, etfs=load_config().etfs)
+    cfg = AppConfig(db_path=str(tmp_path / "botfolio.sqlite"), symbols=load_config().symbols, etfs=load_config().etfs,
+                    strategies=load_config().strategies)
     app, storage = create_app(cfg), Storage(cfg.db_path)
     app.cfg, app.storage, app.kill = cfg, storage, tmp_path / "KILL"
     yield app
@@ -59,13 +60,13 @@ def test_paper_api_uses_worker_state_and_saved_watchlist(api):
     now = datetime.now(UTC).isoformat()
     storage.put("event-watchlist", ["ZZZ"])  # A list saved before the watchlist grew extends the default.
     assert request(api, "/api/config")[1]["symbols"] == [*cfg.symbols, "ZZZ"]
-    storage.put("watchlist", ["AAPL", "SPY"])
+    storage.put("watchlist", ["AAPL", "VOO"])
     storage.put("strategy-status", {"momentum": {"note": "2 breakouts"}})
     storage.put("event-heartbeat", now)
     storage.put("event-paper-armed", True)
     check_in(storage, enabled=True, market_open=True, open_intents=2)
     config = request(api, "/api/config")[1]
-    assert (config["symbols"], config["etfs"]) == (["AAPL", "SPY"], ["SPY"])
+    assert (config["symbols"], config["etfs"]) == (["AAPL", "VOO"], ["VOO"])
     with storage.tx() as conn:
         conn.execute("INSERT INTO event_orders VALUES (?,?)", ("a", json.dumps(
             {"state": "submitted", "symbol": "SPY", "strategy": "etf_trend", "side": "long", "qty": 1.5,
@@ -76,6 +77,7 @@ def test_paper_api_uses_worker_state_and_saved_watchlist(api):
     assert (state["heartbeat"], state["phase"], state["armed"], state["open_intents"]) == (now, "ready", True, 2)
     assert state["strategies"]["momentum"]["note"] == "2 breakouts"
     assert state["strategy_config"]["etf_trend"]["enabled"] is True and state["worker_ready"] is True
+    assert state["strategy_config"]["momentum"]["symbols"] == ["SPY", "QQQ"]
     assert state["intents"] == [
         {"symbol": "SPY", "strategy": "etf_trend", "side": "long", "qty": 1.5, "state": "submitted", "opened": now}]
     assert [(row["key"], row["strategy"]) for row in request(api, "/api/orders")[1]] == [("a", "etf_trend"), ("b", "news")]

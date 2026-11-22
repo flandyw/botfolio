@@ -29,6 +29,12 @@ class MomentumConfig(BaseModel):
     position_pct: float = Field(10.0, gt=0, le=100)
     risk_pct: float = Field(0.5, gt=0, le=5)
     lookback: int = Field(14, ge=2)
+    symbols: list[str] = Field(default_factory=list)  # the watchlist symbols it trades; empty for all of them
+
+    @field_validator("symbols")
+    @classmethod
+    def _upper(cls, v: list[str]) -> list[str]:
+        return list(dict.fromkeys(s.strip().upper() for s in v if s.strip()))
 
 
 class TrendConfig(BaseModel):
