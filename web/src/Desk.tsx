@@ -27,7 +27,8 @@ const STRATEGIES: { name: StrategyName; title: string; trades: (c?: StrategyConf
   {
     name: "momentum",
     title: "Intraday momentum",
-    trades: () => "30-minute closes outside the usual range, long or short, flat by the close",
+    trades: (c) =>
+      `30-minute closes outside the usual range in ${c?.symbols?.length ? c.symbols.join(" and ") : "the watchlist"}, long or short, flat by the close`,
   },
   {
     name: "etf_trend",

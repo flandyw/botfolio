@@ -176,13 +176,20 @@ class StrategyRunner:
 
     def _momentum(self, now, session, symbols):
         cfg = self.cfg.strategies.momentum
+        if cfg.symbols:
+            symbols = [symbol for symbol in symbols if symbol in set(cfg.symbols)]
+        held = self.paper.open_intents("momentum")
+        for intent in held:  # no bars are read for these, so the noise-band exit below would never see them
+            if intent["symbol"] not in symbols:
+                self.paper.request_exit("momentum", intent["symbol"], "removed from the momentum symbols")
+        if not symbols:
+            return "no momentum symbols on the watchlist"
         slot = int((now - session.open - timedelta(seconds=20)) // SLOT)  # bars publish shortly after they end
         if slot < 1:
             return "waiting for the first 30-minute bar"
         if self._slot is None or self._slot[:2] != (slot, symbols):
             self._slot = (slot, symbols, self._momentum_states(now, session, symbols), 0)
         states, submitted = self._slot[2:]
-        held = self.paper.open_intents("momentum")
         for intent in held:
             state = states.get(intent["symbol"])
             if state and not state["long_intact" if intent["side"] == "long" else "short_intact"]:

@@ -130,6 +130,9 @@ def test_default_watchlist_has_over_100_symbols_including_tradable_etfs():
     assert len(cfg.symbols) > 100 and len(set(cfg.symbols)) == len(cfg.symbols)
     assert len(cfg.etfs) >= 20 and set(cfg.etfs) <= set(cfg.symbols)
     assert all(s.enabled for s in (cfg.strategies.news, cfg.strategies.momentum, cfg.strategies.etf_trend))
+    # Momentum's index ETFs are not ETF-strategy symbols, so a held position never blocks a breakout.
+    momentum = cfg.strategies.momentum.symbols
+    assert momentum == ["SPY", "QQQ"] and set(momentum) <= set(cfg.symbols) and not set(momentum) & set(cfg.etfs)
     storage = Storage(":memory:")
     storage.put("event-watchlist", ["ZZZ", "SPY"])  # a list saved before the expansion cannot shrink it
     assert watchlist(storage, cfg) == [*cfg.symbols, "ZZZ"]
@@ -316,6 +319,27 @@ def test_momentum_skips_symbols_held_by_another_strategy(paper):
     status = runner.run()
     # UP is the strongest breakout but belongs to the news strategy, so the one free slot goes to DOWN.
     assert status["momentum"]["orders"] == [dict(symbol="DOWN", side="short", result="submitted")]
+
+
+def test_momentum_trades_only_its_configured_symbols(paper):
+    broker, data = paper.client, Data()
+    data.asks = {"SPY": 600.0, "UP": 101.5, "DOWN": 99.01}
+    paper.cfg.strategies.etf_trend.enabled = False
+    paper.cfg.strategies.momentum.symbols = ["DOWN", "QQQ"]  # QQQ is not on this watchlist
+    runner = StrategyRunner(paper.cfg, data, paper, paper.store.storage)
+    runner.clock = lambda: broker.now
+    status = runner.run()
+    assert status["momentum"]["orders"] == [dict(symbol="DOWN", side="short", result="submitted")]
+    assert "1 breakouts in 1 symbols" in status["momentum"]["note"]
+
+    # A position opened under an earlier symbol list is closed rather than left without its noise-band exit.
+    broker.fill()
+    paper.maintain(NOW)
+    paper.cfg.strategies.momentum.symbols = ["QQQ"]
+    assert "no momentum symbols" in runner.run()["momentum"]["note"]
+    assert [o["symbol"] for o in broker.posts] == ["DOWN"]
+    assert paper.open_intents("momentum")[0]["exit_requested"] == "removed from the momentum symbols"
+    assert AppConfig(strategies={"momentum": {"symbols": [" spy", "SPY", ""]}}).strategies.momentum.symbols == ["SPY"]
 
 
 def test_runner_waits_for_market_and_execution_readiness(paper):
