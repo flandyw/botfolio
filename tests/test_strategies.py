@@ -332,9 +332,13 @@ def test_momentum_trades_only_its_configured_symbols(paper):
     assert status["momentum"]["orders"] == [dict(symbol="DOWN", side="short", result="submitted")]
     assert "1 breakouts in 1 symbols" in status["momentum"]["note"]
 
+    # A position opened under an earlier symbol list is closed rather than left without its noise-band exit.
+    broker.fill()
+    paper.maintain(NOW)
     paper.cfg.strategies.momentum.symbols = ["QQQ"]
-    assert "not on the watchlist" in runner.run()["momentum"]["note"]
+    assert "no momentum symbols" in runner.run()["momentum"]["note"]
     assert [o["symbol"] for o in broker.posts] == ["DOWN"]
+    assert paper.open_intents("momentum")[0]["exit_requested"] == "removed from the momentum symbols"
     assert AppConfig(strategies={"momentum": {"symbols": [" spy", "SPY", ""]}}).strategies.momentum.symbols == ["SPY"]
 
 
