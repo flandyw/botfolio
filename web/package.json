@@ -8,6 +8,7 @@
     "server": "node --experimental-strip-types server/standalone.ts",
     "build": "tsc -b && vp build",
     "lint": "vp lint",
+    "test": "node --test tests/*.test.mjs",
     "preview": "vp preview"
   },
   "dependencies": {
