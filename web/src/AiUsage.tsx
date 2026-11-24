@@ -29,7 +29,7 @@ export function AiUsage() {
   const models = data ? perModel(data.days) : [];
 
   return (
-    <Section title="AI usage" note="UTC days; Cloudflare's free neuron allowance resets at 00:00 UTC">
+    <Section title="AI usage" note="UTC days · Cloudflare's free neuron allowance resets at 00:00 UTC">
       {usage.error && <Message error>{usage.error}</Message>}
       {!data ? (
         !usage.error && <Message>Loading AI usage…</Message>
@@ -37,9 +37,9 @@ export function AiUsage() {
         <div className="grid gap-6 border-t border-rule pt-3">
           {data.budget.throttled && (
             <Message>
-              Vercel refused with HTTP {data.budget.throttled.status}
-              {data.budget.throttled.status === 402 ? " (no credit left)" : " (rate limited)"}. Articles go to
-              Cloudflare until {new Date(data.budget.throttled.until).toLocaleTimeString()}.
+              Vercel returned HTTP {data.budget.throttled.status}
+              {data.budget.throttled.status === 402 ? " (no credit remaining)" : " (rate limited)"}. Routing articles
+              to Cloudflare until {new Date(data.budget.throttled.until).toLocaleTimeString()}.
             </Message>
           )}
           <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-5">
@@ -225,7 +225,7 @@ function Models({ usage, onSaved }: { usage: Usage; onSaved: () => void }) {
         send("PUT", "ai", { primary_model: primary, secondary_model: secondary, share: share === "auto" ? "auto" : share / 100, monthly_usd: monthly })
           .then(
             () => {
-              setResult({ text: "Saved. The worker switches on its next cycle; a new model gets its own experiment." });
+              setResult({ text: "Saved. The worker applies model changes on its next cycle and records a new experiment." });
               onSaved();
             },
             (err: Error) => setResult({ error: true, text: err.message }),
@@ -264,15 +264,15 @@ function Models({ usage, onSaved }: { usage: Usage; onSaved: () => void }) {
               ))}
             </select>
           ) : (
-            <span>Not set up. Add the EVENT_AI_SECONDARY_* settings to .env.</span>
+            <span>Not configured. Set EVENT_AI_SECONDARY_* in .env to enable Vercel AI Gateway.</span>
           )}
         </label>
       </div>
       {s.secondary_ready && (
         <label className="grid gap-2">
           <span className="text-dim">
-            Vercel spend per month: <span className="num text-ink">{usd(monthly)}</span>
-            {monthly > 5 && " (above the $5 free credit, so the rest is billed)"}
+            Vercel monthly budget: <span className="num text-ink">{usd(monthly)}</span>
+            {monthly > 5 && " (above the $5/month free credit; overage is billed)"}
           </span>
           <input
             type="range"
@@ -300,9 +300,9 @@ function Models({ usage, onSaved }: { usage: Usage; onSaved: () => void }) {
           />
           {share === "auto" ? (
             <p className="text-dim">
-              Vercel takes articles while its spend is under an even pace toward {usd(monthly)} a month;
-              unspent credit carries to later days. Cloudflare takes the rest within its free neurons, and Vercel picks
-              up the overflow once those run out.
+              Vercel handles articles while spend stays within an even pace toward {usd(monthly)}/month; unused budget
+              carries forward. Cloudflare handles the rest within its free neuron allowance, with Vercel taking
+              overflow once free neurons run out.
             </p>
           ) : (
             <label className="grid gap-2">
@@ -322,8 +322,8 @@ function Models({ usage, onSaved }: { usage: Usage; onSaved: () => void }) {
             </label>
           )}
           <p className="text-dim">
-            Either way Vercel stops at the daily budget, at {usage.budget.rpm} calls a minute, and for a cooldown after
-            a rate limit (429) or empty credit (402); those articles go to Cloudflare.
+            In both modes, Vercel stops at the daily budget, at {usage.budget.rpm} requests/minute, and during
+            cooldown after a 429 rate limit or 402 empty balance; overflow routes to Cloudflare.
           </p>
         </div>
       )}

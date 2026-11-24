@@ -79,10 +79,10 @@ export default function App() {
   const marketOpen = clock?.isOpen ?? live.data?.market_open ?? null;
   const market =
     marketOpen == null
-      ? "Market hours unknown"
+      ? "Market hours unavailable"
       : marketOpen
-        ? `Market open${clock?.nextClose ? `, closes ${etTime(clock.nextClose)} ET` : ""}`
-        : `Market closed${clock?.nextOpen ? `, opens ${etDayTime(clock.nextOpen)} ET` : ""}`;
+        ? `Market open · closes ${clock?.nextClose ? `${etTime(clock.nextClose)} ET` : "soon"}`
+        : `Market closed${clock?.nextOpen ? ` · opens ${etDayTime(clock.nextOpen)} ET` : ""}`;
   const age = live.data?.heartbeat_age_s;
   const workerOk = age != null && age >= 0 && age < 120;
   const armed = Boolean(live.data?.enabled && live.data.armed);
@@ -128,10 +128,10 @@ export default function App() {
           {live.data && (
             <>
               <span className={workerOk ? "text-dim" : "text-down"}>
-                {age == null ? "Worker not seen yet" : workerOk ? "Worker running" : `Worker silent, last seen ${ago(age)}`}
+                {age == null ? "Worker not started" : workerOk ? "Worker running" : `Worker offline · last seen ${ago(age)}`}
               </span>
               <a href="#/control" className={cx("hover:underline", armed ? "text-dim" : "text-warn")}>
-                {live.data.stopped ? "Emergency stop active" : armed ? "Entries on" : "Entries off"}
+                {live.data.stopped ? "Emergency stop active" : armed ? "Entries on" : "Entries paused"}
               </a>
             </>
           )}

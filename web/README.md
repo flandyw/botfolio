@@ -1,24 +1,39 @@
 # Web dashboard
 
-- **Desk**: the paper account, the five strategies with their last run and orders, positions and recent orders.
-- **Performance**: account P&L, returns, and drawdown across selectable periods, plus unrealized P&L and exposure by open position.
-- **Markets**: the watchlist as a sortable table beside the chart. Filter it, click a row or use the arrow keys.
-- **News**: saved articles with the AI assessment of each.
-- **Control**: turn entries on or off, trigger the emergency stop, edit the watchlist and read the order journal.
+The Botfolio dashboard has five pages:
 
-Run the worker API from the repository root.
+- **Desk**: paper account summary, equity chart, all five strategies with their latest runs, open positions, and recent orders.
+- **Performance**: portfolio P&L, returns, and drawdown across selectable timeframes, plus unrealized P&L and exposure by open position.
+- **Markets**: sortable watchlist table alongside a live price chart. Filter by symbol, click a row, or step through rows with the arrow keys.
+- **News**: saved articles paired with their AI assessments and on-demand evaluation controls.
+- **Control**: entry toggle, emergency stop, watchlist editor, AI usage and model routing, and the order journal.
+
+## Development
+
+Start the Python API from the repository root:
 
 ```bash
 uv run botfolio web
 ```
 
-Run the dashboard from `web/`.
+Start the Vite dev server from `web/`:
 
 ```bash
 npm ci
 npm run dev
 ```
 
-For a built dashboard, run `npm run build` and `npm run server` from `web/`, then open <http://127.0.0.1:8601>. The Node server uses the paper credentials in the repository's `.env` and proxies everything else under `/api` to the worker API on port 8600. Set `BOTFOLIO_API_URL` for a different API address and `HOST` to listen on another interface.
+## Production
 
-Set `BOTFOLIO_DASHBOARD_PASSWORD` in `.env` to require a password for the Control and News pages. Account, prices and worker status stay readable without it.
+Build and serve the dashboard from `web/`:
+
+```bash
+npm run build
+npm run server
+```
+
+Then open <http://127.0.0.1:8601>.
+
+The Node server reads Alpaca Paper credentials from the repository's `.env` for account and market data, and proxies all other `/api/*` requests to `botfolio web` on port `8600`. Set `BOTFOLIO_API_URL` to point at a different API address, or `HOST` and `PORT` to bind elsewhere.
+
+Set `BOTFOLIO_DASHBOARD_PASSWORD` in `.env` to protect the **Control** and **News** pages. Account, market, and worker status views remain readable without a password.

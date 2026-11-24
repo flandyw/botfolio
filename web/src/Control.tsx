@@ -42,9 +42,9 @@ export function Control({
   const needed = live
     ? [
         !live.enabled && "Set EVENT_PAPER_ENABLED=true and EVENT_EXCLUSIVE_ACCOUNT=true in .env, then restart.",
-        !live.worker_ready && "The worker's execution monitor has not checked in within the last 20 seconds.",
-        live.stopped && "The emergency stop is active.",
-        !dedicated && "Tick the box above to confirm the dedicated paper account.",
+        !live.worker_ready && "Execution monitor has not checked in within the last 20 seconds.",
+        live.stopped && "Emergency stop is active.",
+        !dedicated && "Confirm the dedicated paper account above.",
       ].filter((item): item is string => Boolean(item))
     : [];
 
@@ -58,26 +58,25 @@ export function Control({
             ) : (
               <div className="border-t border-rule pt-3">
                 <p className="text-[15px]">
-                  <span className={cx("font-semibold", !on && "text-warn")}>Entries are {on ? "on" : "off"}.</span>{" "}
+                  <span className={cx("font-semibold", !on && "text-warn")}>Entries are {on ? "on" : "paused"}.</span>{" "}
                   {on
-                    ? `The bot places a paper order when any strategy gives a valid signal during market hours.${
-                        live.market_open === false ? " It is waiting because the market is closed." : ""
+                    ? `The bot submits paper orders when any strategy signals during regular market hours.${
+                        live.market_open === false ? " Waiting for the market to open." : ""
                       }`
-                    : "The bot will not open new trades. Open positions are still managed and closed normally."}
+                    : "New trades are paused. Open positions are still managed and closed normally."}
                 </p>
                 {live.message && <Message error>{live.message}</Message>}
                 {live.provider_failures && (
-                  <Message error>A data provider failed its last check. Entries are blocked for that cycle.</Message>
+                  <Message error>A data provider failed its last check. New entries are blocked for this cycle.</Message>
                 )}
                 {live.issuer_feed_failures && <Message>One or more issuer news feeds failed their last check.</Message>}
                 {live.strategy_config.news.enabled && !live.ai_ready && (
                   <Message>
-                    No AI news reader is set up, so the news strategy will not trade. Momentum and ETF trend do not
-                    need one.
+                    No AI news analyst is configured, so News + AI will not trade. Rule-based strategies run without one.
                   </Message>
                 )}
                 {live.strategy_config.news.enabled && live.ai_ready && !live.news_fresh && (
-                  <Message>No current news. Old articles cannot trigger news entries.</Message>
+                  <Message>No recent news. Articles outside the freshness window cannot trigger trades.</Message>
                 )}
                 {!live.armed && (
                   <>
@@ -88,12 +87,12 @@ export function Control({
                         checked={dedicated}
                         onChange={(e) => setDedicated(e.target.checked)}
                       />
-                      This Alpaca paper account is used only by this bot: no manual trading and no other bot.
+                      This Alpaca Paper account is dedicated to Botfolio (no manual trading or other bots).
                     </label>
                     {needed.length > 0 && (
                       <ul className="mt-3 text-[13px] text-dim">
                         {needed.map((item) => (
-                          <li key={item}>Still needed: {item}</li>
+                          <li key={item}>Required: {item}</li>
                         ))}
                       </ul>
                     )}
@@ -115,11 +114,11 @@ export function Control({
           <Section title="Emergency stop">
             <div className="border-t border-rule pt-3">
               <p className="text-[13px] text-dim">
-                Pauses entries, cancels the bot's open orders and closes its paper positions during regular hours.
+                Pauses new entries, cancels open bot orders, and closes bot positions during regular market hours.
               </p>
               {live?.stopped && (
                 <p className="mt-2 text-[13px] text-warn">
-                  The emergency stop is active. Closing positions needs a running worker, a broker connection and an
+                  Emergency stop is active. Closing positions requires a running worker, a broker connection, and an
                   open market.
                 </p>
               )}
@@ -129,7 +128,7 @@ export function Control({
                 </Button>
                 {live?.stopped && (
                   <Button disabled={busy} onClick={() => act("clear-stop")}>
-                    Clear the stop, keep entries paused
+                    Clear stop (keep entries paused)
                   </Button>
                 )}
               </div>
@@ -145,7 +144,7 @@ export function Control({
       <Section title="Order journal" note={journal.data ? String(journal.data.length) : undefined}>
         {journal.error && <Message error>{journal.error}</Message>}
         {journal.data?.length === 0 && (
-          <Message>No orders recorded yet. The worker waits for a valid signal from any strategy.</Message>
+          <Message>No orders recorded yet. Orders appear here once a strategy triggers.</Message>
         )}
         {journal.data && journal.data.length > 0 && (
           <div className="overflow-x-auto">
@@ -204,7 +203,7 @@ function Watchlist({ config, onSaved }: { config: Config; onSaved: () => void })
   const symbols = [...new Set(text.split(/[\s,]+/).map((s) => s.trim().toUpperCase()).filter(Boolean))];
 
   return (
-    <Section title="Watchlist" note={`${symbols.length} symbols, up to ${config.max_symbols}`}>
+    <Section title="Watchlist" note={`${symbols.length} of ${config.max_symbols} symbols`}>
       <form
         className="border-t border-rule pt-3"
         onSubmit={(e) => {
@@ -213,7 +212,7 @@ function Watchlist({ config, onSaved }: { config: Config; onSaved: () => void })
           send<{ symbols: string[] }>("PUT", "watchlist", { symbols })
             .then(
               (r) => {
-                setResult({ text: `Saved ${r.symbols.length} symbols. The worker uses them on its next cycle.` });
+                setResult({ text: `Saved ${r.symbols.length} symbols. The worker applies changes on its next cycle.` });
                 onSaved();
               },
               (err: Error) => setResult({ error: true, text: err.message }),
@@ -233,7 +232,8 @@ function Watchlist({ config, onSaved }: { config: Config; onSaved: () => void })
           className="num block w-full resize-y border border-rule bg-transparent p-2 text-[12px] leading-5 focus:border-ink focus:outline-none"
         />
         <p className="mt-2 text-[13px] text-dim">
-          Every strategy trades from this list. The ETF trend strategy uses the ETFs in it ({config.etfs.length} now).
+          All strategies trade from this watchlist. ETF trend and ETF rotation use the {config.etfs.length} eligible
+          ETFs in it.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <Button type="submit" disabled={busy || text === saved || symbols.length === 0}>

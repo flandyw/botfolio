@@ -1,5 +1,5 @@
 [Unit]
-Description=Botfolio news and paper execution supervisor
+Description=Botfolio paper trading worker and execution monitor
 StartLimitIntervalSec=60
 StartLimitBurst=5
 

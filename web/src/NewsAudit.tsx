@@ -6,8 +6,8 @@ import { Message, Section, SymbolLink } from "./ui";
 import { useApi } from "./useApi";
 
 const ACTIONS: Record<string, string> = {
-  WAIT: "Wait, no trade suggested",
-  HOLD: "Hold, no new trade suggested",
+  WAIT: "Wait (no trade)",
+  HOLD: "Hold (no new trade)",
   BUY: "Buy",
   SELL: "Sell",
 };
@@ -69,7 +69,7 @@ export function NewsAudit({ onOpen }: { onOpen: (symbol: string) => void }) {
   return (
     <Section
       title="News and AI assessments"
-      note={news.data ? `showing ${items.length} of ${news.data.total}, ${news.data.total - news.data.unassessed} assessed, times in ET` : undefined}
+      note={news.data ? `Showing ${items.length} of ${news.data.total} · ${news.data.total - news.data.unassessed} assessed · ET` : undefined}
       aside={
         <button
           disabled={!news.data?.unassessed || sending.includes("all") || batch.left > 0}
@@ -97,9 +97,9 @@ export function NewsAudit({ onOpen }: { onOpen: (symbol: string) => void }) {
           ))}
         </select>
         <select value={f.status} onChange={set("status")} aria-label="Assessment status" className={CTL}>
-          <option value="">Assessed or not</option>
+          <option value="">Any status</option>
           <option value="assessed">Assessed</option>
-          <option value="unassessed">Not assessed</option>
+          <option value="unassessed">Unassessed</option>
         </select>
         <select value={f.action} onChange={set("action")} aria-label="Suggested action" className={CTL}>
           <option value="">Any action</option>
@@ -130,29 +130,29 @@ export function NewsAudit({ onOpen }: { onOpen: (symbol: string) => void }) {
       {(news.error || error) && <Message error>{news.error || error}</Message>}
       {news.data && items.length === 0 && (
         <Message>
-          {Object.keys(filters).length ? "No articles match these filters." : "No news saved yet. The worker fills this page as it receives articles."}
+          {Object.keys(filters).length ? "No articles match the current filters." : "No articles saved yet. Incoming articles appear here as the worker polls."}
         </Message>
       )}
       {news.data?.archived && (
         <p className="border-t border-rule py-2 text-[13px] text-warn">
-          These are archived articles. The newest is more than a day old, so none of these is a current signal.
+          Archived articles only. The newest item is over a day old, so none are live signals.
         </p>
       )}
       {l && (
         <dl className="mb-2 flex flex-wrap gap-x-6 gap-y-1 border-t border-rule py-2 text-[13px]" role="status">
           <Stat label="Worker" ok={workerOk}>
-            {workerOk ? `running, checked in ${ago(l.heartbeat_age_s)}` : "not responding, nothing is being assessed"}
+            {workerOk ? `running (${ago(l.heartbeat_age_s)})` : "offline (assessments paused)"}
           </Stat>
-          <Stat label="AI reader" ok={l.ai_ready}>{l.ai_ready ? "set up" : "not set up"}</Stat>
+          <Stat label="AI analyst" ok={l.ai_ready}>{l.ai_ready ? "configured" : "not configured"}</Stat>
           <Stat label="News feed" ok={!l.provider_failures && !l.issuer_feed_failures}>
-            {l.provider_failures ? "last check failed" : l.issuer_feed_failures ? "an issuer feed failed" : "last check ok"}
-            {l.news_fresh ? ", new articles in the last 5 minutes" : ", no new articles in the last 5 minutes"}
+            {l.provider_failures ? "last check failed" : l.issuer_feed_failures ? "issuer feed error" : "healthy"}
+            {l.news_fresh ? " · fresh articles (<5m)" : " · no new articles in 5m"}
           </Stat>
-          <Stat label="Assessing" ok={batch.left === 0 || workerOk}>
+          <Stat label="Queue" ok={batch.left === 0 || workerOk}>
             {batch.left > 0
-              ? `${batch.left} waiting`
+              ? `${batch.left} queued`
               : news.data?.last_assessed
-                ? `idle, last one ${ago((Date.now() - new Date(news.data.last_assessed).getTime()) / 1000)}`
+                ? `idle · last ${ago((Date.now() - new Date(news.data.last_assessed).getTime()) / 1000)}`
                 : "idle"}
           </Stat>
         </dl>
@@ -174,7 +174,7 @@ export function NewsAudit({ onOpen }: { onOpen: (symbol: string) => void }) {
                 <SymbolLink symbol={item.ticker} onOpen={onOpen} />
               </div>
               <div className="mt-1 font-medium">
-                {item.decision ? (ACTIONS[item.decision.action] ?? item.decision.action) : "Not assessed"}
+                {item.decision ? (ACTIONS[item.decision.action] ?? item.decision.action) : "Unassessed"}
               </div>
               {!item.decision && (
                 <button

@@ -285,7 +285,7 @@ export function createAlpacaBridge(cfg: AlpacaBridgeConfig = {}): AlpacaBridge {
             streamClients: clients.size,
             clock: null,
             accountNumber: null,
-            error: "No Alpaca paper credentials configured in .env",
+            error: "No Alpaca Paper credentials configured in .env",
           });
           return true;
         }
@@ -315,7 +315,7 @@ export function createAlpacaBridge(cfg: AlpacaBridgeConfig = {}): AlpacaBridge {
           error: !check.ok
             ? check.message
             : !isPaperAcct
-              ? "Account is not a paper account (expected PA*)"
+              ? "Connected account is not a paper account (expected PA*)"
               : null,
         });
         return true;

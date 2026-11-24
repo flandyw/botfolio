@@ -1,5 +1,5 @@
 [Unit]
-Description=Botfolio web UI and read-only API (React build in web/dist), exposed via tailscale serve
+Description=Botfolio web API (status, controls, journal, and news)
 StartLimitIntervalSec=0
 
 [Service]

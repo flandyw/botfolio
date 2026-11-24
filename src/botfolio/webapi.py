@@ -1,4 +1,4 @@
-"""API behind the web dashboard: worker status, the order journal, the news audit and the paper controls."""
+"""Dashboard API for worker status, paper trading controls, order journal, and news audit."""
 
 import hmac
 import json
@@ -234,7 +234,7 @@ def create_app(cfg: AppConfig) -> Starlette:
         except (ValueError, KeyError, TypeError):
             symbols = []
         if not symbols or len(symbols) > MAX_WATCHLIST or any(not SYMBOL.fullmatch(s) for s in symbols):
-            return JSONResponse({"error": f"Enter 1–{MAX_WATCHLIST} valid ticker symbols separated by commas."}, 400)
+            return JSONResponse({"error": f"Enter 1–{MAX_WATCHLIST} valid ticker symbols separated by commas or spaces."}, 400)
         storage.put("watchlist", symbols)
         return JSONResponse({"symbols": symbols})
 
@@ -298,11 +298,11 @@ def create_app(cfg: AppConfig) -> Starlette:
             if current["primary_provider"] == "clairic" and primary not in CLOUDFLARE_MODELS:
                 return JSONResponse({"error": "Unknown Cloudflare model."}, 400)
             if secondary != current["secondary_model"] and secondary not in vercel_models():
-                return JSONResponse({"error": "That model is not on Vercel AI Gateway with JSON output."}, 400)
+                return JSONResponse({"error": "Selected model is not available on Vercel AI Gateway with JSON output."}, 400)
             if not 0 <= monthly <= MAX_MONTHLY_USD:
-                return JSONResponse({"error": f"The Vercel budget must be $0–${MAX_MONTHLY_USD} a month."}, 400)
+                return JSONResponse({"error": f"Vercel monthly budget must be between $0 and ${MAX_MONTHLY_USD}."}, 400)
             if share != "auto" and not 0 <= share <= 1:
-                return JSONResponse({"error": "The split must be between 0% and 100%."}, 400)
+                return JSONResponse({"error": "Traffic split must be between 0% and 100%."}, 400)
             storage.put("ai-settings", {"primary_model": primary, "secondary_model": secondary, "share": share,
                                         "monthly_usd": monthly})
         since = (datetime.now(UTC) - timedelta(days=13)).date().isoformat()
