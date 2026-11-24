@@ -500,7 +500,7 @@ export function createAlpacaBridge(cfg: AlpacaBridgeConfig = {}): AlpacaBridge {
               profitLossPct: returnFraction == null ? null : returnFraction * 100,
             };
           })
-          .filter((p) => p.time > 0 && p.equity != null)
+          .filter((p) => p.time > 0)
           .sort((a, b) => a.time - b.time)
           .filter((p, i, list) => p.time !== list[i + 1]?.time);
         sendJson(res, 200, {

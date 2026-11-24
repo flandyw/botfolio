@@ -3,8 +3,9 @@ import type { AlpacaHistoryPoint, AlpacaPosition } from "./api";
 export type PerformancePoint = { time: number; value: number | null };
 
 export function portfolioPerformance(points: AlpacaHistoryPoint[]) {
-  const funded = points.findIndex((point) => point.equity !== 0);
-  const history = funded < 0 ? [] : points.slice(funded);
+  const funded = points.findIndex((point) => point.equity != null && point.equity !== 0);
+  const lastObserved = points.findLastIndex((point) => point.equity != null);
+  const history = funded < 0 ? [] : points.slice(funded, lastObserved + 1);
   const pnl: PerformancePoint[] = [];
   const returns: PerformancePoint[] = [];
   const changes: PerformancePoint[] = [];
@@ -14,8 +15,8 @@ export function portfolioPerformance(points: AlpacaHistoryPoint[]) {
   let maxDrawdown: number | null = null;
 
   for (const { time, equity, profitLoss, profitLossPct } of history) {
-    peak = Math.max(peak, equity);
-    const fromPeak = peak > 0 ? ((equity - peak) / peak) * 100 : null;
+    if (equity != null) peak = Math.max(peak, equity);
+    const fromPeak = equity != null && peak > 0 ? ((equity - peak) / peak) * 100 : null;
     if (fromPeak != null) maxDrawdown = Math.min(maxDrawdown ?? 0, fromPeak);
 
     pnl.push({ time, value: profitLoss });

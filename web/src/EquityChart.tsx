@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { LineSeries, LineStyle, type Time } from "lightweight-charts";
 import type { AlpacaHistoryPoint } from "./api";
 import { palette, useChart, useThemeKey } from "./chart";
@@ -8,18 +8,22 @@ import { Message } from "./ui";
 export function EquityChart({ points, baseValue }: { points: AlpacaHistoryPoint[]; baseValue: number | null }) {
   const { ref, chart } = useChart({ rightPriceScale: { scaleMargins: { top: 0.12, bottom: 0.12 } } });
   const themeKey = useThemeKey();
+  const data = useMemo(
+    () => points.flatMap(({ time, equity }) => (equity == null ? [] : [{ time: time as Time, value: equity }])),
+    [points],
+  );
 
   useEffect(() => {
-    if (!chart || !points.length) return;
+    if (!chart || !data.length) return;
     const colors = palette();
-    const first = baseValue ?? points[0].equity;
+    const first = baseValue ?? data[0].value;
     const line = chart.addSeries(LineSeries, {
-      color: points[points.length - 1].equity >= first ? colors.up : colors.down,
+      color: data[data.length - 1].value >= first ? colors.up : colors.down,
       lineWidth: 2,
       priceLineVisible: false,
       priceFormat: { type: "custom", formatter: (v: number) => usd(v, 0) },
     });
-    line.setData(points.map((p) => ({ time: p.time as Time, value: p.equity })));
+    line.setData(data);
     if (baseValue != null) {
       line.createPriceLine({
         price: baseValue,
@@ -38,12 +42,12 @@ export function EquityChart({ points, baseValue }: { points: AlpacaHistoryPoint[
         // the chart was already removed
       }
     };
-  }, [chart, points, baseValue, themeKey]);
+  }, [chart, data, baseValue, themeKey]);
 
   return (
     <div className="relative h-[260px] w-full">
       <div ref={ref} className="h-full w-full" />
-      {!points.length && (
+      {!data.length && (
         <div className="absolute inset-0 grid place-items-center bg-bg">
           <Message>No equity history for this period.</Message>
         </div>
