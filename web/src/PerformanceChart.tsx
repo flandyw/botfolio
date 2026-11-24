@@ -110,7 +110,7 @@ export function PerformanceChart({
     const series = seriesRef.current;
     if (!chart || !series) return;
     const colors = palette();
-    const visibleRange = series.data().length ? chart.timeScale().getVisibleLogicalRange() : null;
+    const firstLoad = !series.data().length;
     series.setData(
       points.map(({ time, value }) =>
         value == null
@@ -122,8 +122,8 @@ export function PerformanceChart({
             },
       ),
     );
-    if (visibleRange) chart.timeScale().setVisibleLogicalRange(visibleRange);
-    else chart.timeScale().fitContent();
+    // The time scale follows new bars when the latest bar is visible.
+    if (firstLoad) chart.timeScale().fitContent();
   }, [chart, points, metric, themeKey]);
 
   return (
