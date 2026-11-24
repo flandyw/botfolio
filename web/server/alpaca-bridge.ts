@@ -480,22 +480,29 @@ export function createAlpacaBridge(cfg: AlpacaBridgeConfig = {}): AlpacaBridge {
         const client = await requirePaperClient();
         const period = url.searchParams.get("period") ?? "1M";
         const timeframe = url.searchParams.get("timeframe") ?? (period === "1D" ? "5Min" : "1D");
+        const continuousPnl = url.searchParams.get("pnl_reset") === "no_reset";
         const hist = await client.trading.portfolioHistory.getAccountPortfolioHistory({
           period,
           timeframe,
+          pnlReset: continuousPnl ? "no_reset" : undefined,
         });
         const timestamps = hist.timestamp ?? [];
         const equities = hist.equity ?? [];
         const pl = hist.profitLoss ?? [];
         const plPct = hist.profitLossPct ?? [];
         const points = timestamps
-          .map((ts, i) => ({
-            time: nyChartTime(ts * 1000),
-            equity: num(equities[i]),
-            profitLoss: num(pl[i]),
-            profitLossPct: plPct[i] != null ? Number(plPct[i]) * 100 : null,
-          }))
-          .filter((p) => p.time > 0 && p.equity != null);
+          .map((ts, i) => {
+            const returnFraction = num(plPct[i]);
+            return {
+              time: nyChartTime(ts * 1000),
+              equity: num(equities[i]),
+              profitLoss: num(pl[i]),
+              profitLossPct: returnFraction == null ? null : returnFraction * 100,
+            };
+          })
+          .filter((p) => p.time > 0)
+          .sort((a, b) => a.time - b.time)
+          .filter((p, i, list) => p.time !== list[i + 1]?.time);
         sendJson(res, 200, {
           period,
           timeframe,

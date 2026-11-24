@@ -11,7 +11,7 @@ export function useApi<T>(path: string | null, refreshMs = 0) {
     const load = () =>
       get<T>(path).then(
         (data) => alive && setState({ data, path }),
-        (e: Error) => alive && setState((s) => ({ ...s, error: e.message, path })),
+        (e: Error) => alive && setState((s) => ({ data: s.path === path ? s.data : undefined, error: e.message, path })),
       );
     void load();
     const id = refreshMs ? setInterval(() => void load(), refreshMs) : undefined;

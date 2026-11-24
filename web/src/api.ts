@@ -246,7 +246,7 @@ export type AlpacaAccountResponse = {
 
 export type AlpacaHistoryPoint = {
   time: number;
-  equity: number;
+  equity: number | null;
   profitLoss: number | null;
   profitLossPct: number | null;
 };

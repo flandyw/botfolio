@@ -6,13 +6,14 @@ import { Desk } from "./Desk";
 import { ago, etDayTime, etTime } from "./format";
 import { Markets } from "./Markets";
 import { NewsAudit } from "./NewsAudit";
+import { Performance } from "./Performance";
 import { Message } from "./ui";
 import { Unlock } from "./Unlock";
 import { useAlpacaStream } from "./useAlpacaStream";
 import { useApi } from "./useApi";
 
 type Theme = "dark" | "light";
-const VIEWS = ["desk", "markets", "news", "control"] as const;
+const VIEWS = ["desk", "performance", "markets", "news", "control"] as const;
 type View = (typeof VIEWS)[number];
 type Route = { view: View; symbol: string };
 
@@ -26,7 +27,7 @@ function initialTheme(): Theme {
   return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-/** `#/markets/SPY`, `#/news`, `#/control` or `#/desk`; anything else is the desk. */
+/** The first hash segment selects a page; Markets also accepts a symbol. */
 function readRoute(): Route {
   const [view, raw = ""] = location.hash.replace(/^#\/?/, "").split("/");
   let symbol = "";
@@ -99,10 +100,11 @@ export default function App() {
         <a href="#/desk" className="text-[17px] font-semibold tracking-tight">
           Botfolio
         </a>
-        <nav className="flex gap-5 text-[14px]" aria-label="Pages">
+        <nav className="flex flex-wrap gap-x-5 gap-y-1 text-[14px]" aria-label="Pages">
           {(
             [
               ["desk", "Desk", "#/desk"],
+              ["performance", "Performance", "#/performance"],
               ["markets", "Markets", "#/markets"],
               ["news", "News", "#/news"],
               ["control", "Control", "#/control"],
@@ -172,6 +174,8 @@ export default function App() {
             etfs={etfs.length}
             onOpen={openSymbol}
           />
+        ) : route.view === "performance" ? (
+          <Performance status={status.data} statusError={status.error} onOpen={openSymbol} />
         ) : (
           <Markets
             symbols={route.symbol && !symbols.includes(route.symbol) ? [route.symbol, ...symbols] : symbols}
