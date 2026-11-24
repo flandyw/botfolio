@@ -1,7 +1,7 @@
 [project]
 name = "botfolio"
 version = "1.0.0"
-description = "News-driven Alpaca paper trading and supervision."
+description = "Automated multi-strategy Alpaca Paper trading worker and dashboard."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

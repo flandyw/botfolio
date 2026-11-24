@@ -194,7 +194,7 @@ export function Markets({
           </span>
         </div>
 
-        {!connected && <Message>Connect the Alpaca paper account to see charts.</Message>}
+        {!connected && <Message>Connect your Alpaca Paper account to view charts.</Message>}
         {bars.error && <Message error>{bars.error}</Message>}
         {bars.data && !bars.error && (
           <PriceChart
@@ -290,7 +290,7 @@ export function Markets({
               ))}
             </tbody>
           </table>
-          {rows.length === 0 && <Message>No symbols match.</Message>}
+          {rows.length === 0 && <Message>No matching symbols.</Message>}
         </div>
       </section>
     </div>

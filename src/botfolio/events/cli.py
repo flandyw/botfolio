@@ -1,4 +1,4 @@
-"""The paper worker: news ingestion, the combined strategies and paper execution."""
+"""Paper trading worker: news ingestion, rule-based strategies, and execution monitoring."""
 from __future__ import annotations
 
 import asyncio
@@ -151,9 +151,9 @@ async def watch(cfg, store, experiment, once=False):
 
 
 def parser(sub):
-    event = sub.add_parser("events", help="run the combined strategies on Alpaca Paper")
+    event = sub.add_parser("events", help="run the paper trading worker and inspect saved AI decisions")
     commands = event.add_subparsers(dest="event_cmd", required=True)
-    commands.add_parser("decision-stats", help="summarize saved AI decisions by experiment, model and source")
-    watch_parser = commands.add_parser("watch", help="run the news, strategy and execution monitors")
+    commands.add_parser("decision-stats", help="summarize saved AI decisions by experiment, model, and source")
+    watch_parser = commands.add_parser("watch", help="run the news, strategy, and execution monitors")
     watch_parser.add_argument("--experiment", default=os.getenv("EVENT_AI_EXPERIMENT") or "clairic-v1")
     watch_parser.add_argument("--once", action="store_true")

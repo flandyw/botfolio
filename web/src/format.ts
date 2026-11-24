@@ -14,7 +14,7 @@ export const pct = (v: number | null | undefined, d = 2) => (missing(v) ? "—" 
 const compactFormat = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 export const compact = (v: number | null | undefined) => (missing(v) ? "—" : compactFormat.format(v));
 
-/** Text colour for a gain or a loss; zero and missing values stay neutral. */
+/** Text color for a gain or loss; zero and missing values stay neutral. */
 export const tone = (v: number | null | undefined) =>
   missing(v) || v === 0 ? "" : v > 0 ? "text-up" : "text-down";
 

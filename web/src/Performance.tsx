@@ -90,7 +90,7 @@ export function Performance({
       )}
       {connected && (
         <>
-          <Section title="Portfolio history" note="P&L and return as reported by Alpaca">
+          <Section title="Portfolio history" note="P&L and return reported by Alpaca">
             {history.error && (
               <div className="flex flex-wrap items-center gap-3">
                 <Message error>{history.error}</Message>
@@ -127,7 +127,7 @@ export function Performance({
                         metric={mode}
                         points={mode === "pnl" ? stats.pnl : stats.returns}
                         intraday={intraday}
-                        empty="Alpaca returned no values for this metric."
+                        empty="Alpaca returned no data for this metric."
                       />
                     </Panel>
                     <Panel title="Drawdown">
@@ -136,9 +136,9 @@ export function Performance({
                         metric="drawdown"
                         points={stats.drawdown}
                         intraday={intraday}
-                        empty="Drawdown requires a positive equity observation."
+                        empty="Drawdown requires at least one positive equity point."
                       />
-                      <p className="mt-2 text-[12px] text-dim">From the period’s running equity peak. Cash transfers can affect it.</p>
+                      <p className="mt-2 text-[12px] text-dim">From the period's running equity peak. Cash transfers may affect drawdown.</p>
                     </Panel>
                     <div className="lg:col-span-2">
                       <Panel title={changeTitle}>
@@ -147,9 +147,9 @@ export function Performance({
                           metric="change"
                           points={stats.changes}
                           intraday={intraday}
-                          empty="At least two consecutive P&L observations are needed."
+                          empty="At least two consecutive P&L points are required."
                         />
-                        <p className="mt-2 text-[12px] text-dim">Change in reported P&L between consecutive observations.</p>
+                        <p className="mt-2 text-[12px] text-dim">Change in reported P&L between consecutive intervals.</p>
                       </Panel>
                     </div>
                   </div>
@@ -159,7 +159,7 @@ export function Performance({
               </>
             )}
           </Section>
-          <Section title="Open positions" note="Current values · independent of the history period">
+          <Section title="Open positions" note="Live snapshot · independent of the selected period">
             {account.loading && <Message>Loading open positions…</Message>}
             {account.error && (
               <div className="flex flex-wrap items-center gap-3">

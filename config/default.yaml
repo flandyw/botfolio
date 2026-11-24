@@ -1,4 +1,4 @@
-# The control room can override this watchlist at runtime. Every strategy trades from it.
+# Default watchlist traded by all strategies; editable at runtime from the Control page.
 symbols: [
   # ETFs
   SPY, QQQ, IWM, DIA, VTI, VOO, VGT, XLK, SOXX, VUG, SMH, XLF, XLE, XLV, XLI, XLY, XLP, XLU, XLC, XLB,
@@ -11,26 +11,26 @@ symbols: [
   JPM, BAC, WFC, GS, MS, C, V, MA, AXP, BLK, SCHW, BRK.B,
   # Health care
   UNH, JNJ, LLY, PFE, MRK, ABBV, TMO, ABT, AMGN, GILD, ISRG,
-  # Energy, consumer and communications
+  # Energy, consumer, and communications
   XOM, CVX, COP, WMT, COST, HD, LOW, TGT, MCD, SBUX, NKE, KO, PEP, PG, DIS, CMCSA, T, VZ, TMUS,
   # Industrials and autos
   BA, CAT, DE, GE, HON, LMT, RTX, UPS, F, GM, RIVN, BABA, BKNG,
 ]
-# Watchlist symbols the trend strategy may hold overnight.
-# SPY and QQQ are left to the momentum strategy, since a symbol has one owner: VOO and QQQM hold the same indexes.
+# Watchlist ETFs eligible for overnight ETF trend and rotation strategies.
+# SPY and QQQ are reserved for intraday momentum (one strategy per symbol); VOO and QQQM track the same indexes.
 etfs: [QQQM, IWM, DIA, VTI, VOO, VGT, XLK, SOXX, VUG, SMH, XLF, XLE, XLV, XLI, XLY, XLP, XLU, XLC, XLB,
        XLRE, EFA, EEM, TLT, GLD]
 data:
   feed: iex
-# Every strategy submits orders to the Alpaca Paper account. A symbol is held by one strategy at a time.
+# Every strategy routes real paper orders to Alpaca Paper. Only one strategy holds a symbol at a time.
 strategies:
-  news:       # AI call on fresh news: bracket order, stop 1%, target 2R, timed exit
+  news:       # AI news evaluation: bracket order (1% stop, 2R target) with timed exit
     {enabled: true, max_positions: 5, position_pct: 25, risk_pct: 1}
-  momentum:   # 30-minute noise-band breakout in `symbols`, long or short, stop at the far band, flat by the close
+  momentum:   # 30-minute noise-band breakout in `symbols` (long/short), stop at far band, flat by close
     {enabled: true, symbols: [SPY, QQQ], max_positions: 2, position_pct: 25, risk_pct: 0.5, lookback: 14}
-  etf_trend:  # hold each ETF above its 200-day average; allocation is split equally across `etfs`
+  etf_trend:  # Hold each ETF above its 200-day average; allocation split equally across `etfs`
     {enabled: true, allocation_pct: 50, sma_days: 200, band_pct: 1}
-  etf_rotation:  # hold the `top` ETFs by 1/3/6/12-month momentum, each until it leaves the top `keep`
+  etf_rotation:  # Hold the top ETFs by 1/3/6/12-month return until they drop out of the top `keep`
     {enabled: true, allocation_pct: 40, top: 5, keep: 10, sma_days: 200}
-  cash_park:  # keep the cash the overnight strategies are not using in a Treasury-bill ETF
+  cash_park:  # Park idle cash from overnight strategies in a Treasury-bill ETF
     {enabled: true, symbol: BOXX, reserve_pct: 5, band_pct: 5}

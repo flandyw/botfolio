@@ -1,4 +1,4 @@
-"""Commands for the Alpaca Paper worker and its web dashboard."""
+"""CLI commands for the Botfolio paper trading worker and web API."""
 
 from __future__ import annotations
 
@@ -19,15 +19,15 @@ from botfolio.storage import Storage
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(os.environ.get("BOTFOLIO_ENV_FILE", ".env"))
     check_environment()
-    parser = argparse.ArgumentParser(prog="botfolio", description="News-driven Alpaca paper trading")
-    parser.add_argument("--config", help="YAML config path (defaults to config/default.yaml or BOTFOLIO_CONFIG)")
-    parser.add_argument("--db", help="SQLite path (defaults to data/botfolio.sqlite or BOTFOLIO_DB_PATH)")
+    parser = argparse.ArgumentParser(prog="botfolio", description="Automated multi-strategy Alpaca Paper trading worker and API")
+    parser.add_argument("--config", help="YAML config path (default: config/default.yaml or BOTFOLIO_CONFIG)")
+    parser.add_argument("--db", help="SQLite database path (default: data/botfolio.sqlite or BOTFOLIO_DB_PATH)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("check", help="verify the Alpaca paper account")
+    sub.add_parser("check", help="verify the Alpaca Paper account connection")
     health = sub.add_parser("health", help="exit 0 when the paper worker heartbeat is recent")
     health.add_argument("--max-age", type=int, default=900)
-    web = sub.add_parser("web", help="serve the web dashboard's API: worker status, controls, journal and news")
+    web = sub.add_parser("web", help="serve the dashboard API (worker status, controls, journal, and news)")
     web.add_argument("--port", type=int, default=8600)
     web.add_argument("--host", default="127.0.0.1")
     events.parser(sub)

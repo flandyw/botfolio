@@ -59,7 +59,7 @@ export function Section({
   );
 }
 
-/** A labelled figure on the account and worker lines. */
+/** A labeled figure on the account and worker summary lines. */
 export function Figure({ label, children, large }: { label: string; children: ReactNode; large?: boolean }) {
   return (
     <div className="min-w-0">

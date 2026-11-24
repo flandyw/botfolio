@@ -20,13 +20,13 @@ export function Unlock({ onUnlock }: { onUnlock: () => void }) {
           },
           (err: Error) => {
             setBusy(false);
-            setError(err instanceof ApiError && err.status === 401 ? "That password did not match." : err.message);
+            setError(err instanceof ApiError && err.status === 401 ? "Incorrect password." : err.message);
           },
         );
       }}
     >
       <h2 className="text-[15px] font-semibold">Dashboard password</h2>
-      <p className="mt-1 text-[13px] text-dim">The controls, order journal and news audit are protected.</p>
+      <p className="mt-1 text-[13px] text-dim">Enter the dashboard password to access Control and News.</p>
       <div className="mt-3 flex gap-2">
         <input
           type="password"
