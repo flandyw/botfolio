@@ -30,8 +30,8 @@ uv run botfolio events watch
 
 Add your Alpaca Paper credentials and AI analyst settings to `.env` before starting the worker:
 
-- **Primary analyst (Clairic / Cloudflare Workers AI):** Set `EVENT_AI_PROVIDER=clairic`, `EVENT_AI_MODEL=clairic`, and your endpoint and token in `EVENT_AI_URL` and `EVENT_AI_KEY`.
-- **Optional secondary analyst (Vercel AI Gateway):** Set `EVENT_AI_SECONDARY_*` to split traffic across a second model with a monthly dollar cap and per-minute rate limit.
+- **Cloudflare (Clairic / Workers AI):** Set `EVENT_AI_PROVIDER=clairic`, `EVENT_AI_MODEL=clairic`, and your endpoint and token in `EVENT_AI_URL` and `EVENT_AI_KEY`.
+- **More providers:** `EVENT_AI_CLAUDE_MODEL` (local `claude -p` on this machine's Claude plan), `EVENT_AI_CHATGPT_*` (ChatGPT plan through the sign-in sidecar) and `EVENT_AI_VERCEL_*` (Vercel AI Gateway or OpenRouter, with a monthly dollar cap). Each article goes to the first provider in the priority order set on the dashboard that is under its caps; the default order is Claude, ChatGPT, Vercel, Cloudflare.
 - **Experiment tracking:** Update `EVENT_AI_EXPERIMENT` whenever you change provider, model, endpoint, or prompt so saved decisions remain auditable.
 
 To run the web dashboard in a second terminal:
@@ -47,7 +47,7 @@ npm ci
 npm run dev
 ```
 
-Open the URL printed by Vite. The dashboard has five pages: **Desk** (account, strategies, positions, recent orders), **Performance** (P&L, returns, drawdown, and open exposure), **Markets** (watchlist table and charts), **News** (saved articles and AI assessments), and **Control** (entry toggle, emergency stop, watchlist editor, AI usage, and order journal).
+Open the URL printed by Vite. The dashboard has six pages: **Desk** (account, strategies, positions, recent orders), **Activity** (order journal, fill charts, stops, targets, and strategy signals), **Performance** (P&L, returns, drawdown, and open exposure), **Markets** (watchlist table and charts), **News** (saved articles and AI assessments), and **Control** (entry toggle, emergency stop, watchlist editor, and AI usage).
 
 Run `uv run botfolio events decision-stats` for a summary of saved AI decisions.
 

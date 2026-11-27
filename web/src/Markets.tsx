@@ -3,7 +3,7 @@ import type { AlpacaSnapshot, AlpacaStreamBar, Bar } from "./api";
 import { LINES } from "./chart";
 import { cell, cx } from "./classes";
 import { compact, num, pct, signed, tone } from "./format";
-import { type ChartOverlays, PriceChart } from "./PriceChart";
+import { type ChartOverlays, INDICATORS, PriceChart } from "./PriceChart";
 import { Choice, Message } from "./ui";
 import { useApi } from "./useApi";
 
@@ -23,13 +23,6 @@ const RANGES = [
   [365, "1Y"],
   [730, "2Y"],
 ] as const;
-const INDICATORS: [keyof ChartOverlays, string][] = [
-  ["sma20", "SMA 20"],
-  ["ema50", "EMA 50"],
-  ["vwap", "VWAP"],
-  ["bb", "Bollinger 20, 2"],
-  ["rsi", "RSI 14"],
-];
 const GROUPS = [
   ["all", "All"],
   ["etf", "ETFs"],

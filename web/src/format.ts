@@ -31,8 +31,10 @@ const eastern = (options: Intl.DateTimeFormatOptions) =>
 const clockTime = eastern({ hour: "2-digit", minute: "2-digit" });
 const dayTime = eastern({ weekday: "short", hour: "2-digit", minute: "2-digit" });
 const dateTime = eastern({ month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const executionTime = eastern({ month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 /** New York time, the exchange's clock. */
 export const etTime = (iso: string | null | undefined) => (iso ? clockTime.format(new Date(iso)) : "—");
 export const etDayTime = (iso: string | null | undefined) => (iso ? dayTime.format(new Date(iso)).replace(",", "") : "—");
 export const etDateTime = (iso: string | null | undefined) => (iso ? dateTime.format(new Date(iso)) : "—");
+export const etExecutionTime = (iso: string) => executionTime.format(new Date(iso));

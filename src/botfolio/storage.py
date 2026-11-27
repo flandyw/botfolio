@@ -48,5 +48,6 @@ class Storage:
             c.execute("INSERT OR REPLACE INTO kv VALUES (?,?,?)", (key, blob, datetime.now(UTC).isoformat()))
 
     def get(self, key: str) -> Any | None:
-        row = self._conn.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        with self._lock:  # one connection serves every worker thread; unlocked reads race the writes
+            row = self._conn.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
         return pickle.loads(row[0]) if row else None

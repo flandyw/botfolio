@@ -12,7 +12,18 @@ from botfolio.events.paper import TERMINAL, PaperExecutor, Signal
 from botfolio.events.store import EventStore
 from botfolio.safety import PAPER_TRADING_URL
 from botfolio.storage import Storage
-from botfolio.strategies import StrategyRunner, momentum_states, noise_profile, rotation_members, trend_states
+from botfolio.strategies import (
+    FAST,
+    StrategyRunner,
+    momentum_states,
+    noise_profile,
+    opening_volume,
+    orb_states,
+    pullback_states,
+    rotation_members,
+    trend_states,
+    vwap_states,
+)
 
 CAL = get_calendar("NASDAQ")
 DAY1 = CAL.session(datetime(2025, 1, 7).date())
@@ -95,15 +106,15 @@ def paper(monkeypatch, tmp_path):
     return executor
 
 
-def bars(session, moves):
-    """30-minute bars for one session: {symbol: [close per bar]}; each bar opens at the previous close."""
+def bars(session, moves, step=timedelta(minutes=30), volume=1000):
+    """Bars for one session: {symbol: [close per bar]}; each bar opens at the previous close."""
     rows = []
     for symbol, closes in moves.items():
         opened = closes[0]
         for i, close in enumerate(closes[1:]):
-            if session.open + i * timedelta(minutes=30) < session.close:
-                rows.append((symbol, session.open + i * timedelta(minutes=30), opened, max(opened, close),
-                             min(opened, close), close, 1000))
+            if session.open + i * step < session.close:
+                rows.append((symbol, session.open + i * step, opened, max(opened, close),
+                             min(opened, close), close, volume))
                 opened = close
     frame = pd.DataFrame(rows, columns=BAR_COLUMNS)
     frame["ts"] = pd.to_datetime(frame["ts"], utc=True)
@@ -247,11 +258,17 @@ def trending(end, gains, periods=260):
 class Data:
     def __init__(self):
         self.daily, self.today, self.asks = {"SPY": (100, 110), "TLT": (100, 90)}, TODAY, {}
-        self.quoted_at, self.gains = NOW, None
+        self.quoted_at, self.gains, self.daily_frame = NOW, None, None
+        self.fast = self.opening = pd.DataFrame(columns=BAR_COLUMNS)
 
     def get_bars(self, symbols, start, end, timeframe, feed, adjustment):
         if timeframe == "1Day":
-            frame = trending(end, self.gains) if self.gains else daily(end, self.daily)
+            frame = (self.daily_frame if self.daily_frame is not None
+                     else trending(end, self.gains) if self.gains else daily(end, self.daily))
+        elif timeframe == "5Min":
+            frame = self.fast
+        elif timeframe == "15Min":
+            frame = self.opening
         elif end <= DAY1.open or DAY1.close < end <= DAY2.open:
             frame = history()
         else:
@@ -345,7 +362,8 @@ def test_momentum_trades_only_its_configured_symbols(paper):
 def test_runner_waits_for_market_and_execution_readiness(paper):
     runner = StrategyRunner(paper.cfg, Data(), paper, paper.store.storage)
     runner.clock = lambda: datetime(2025, 1, 4, 16, tzinfo=UTC)  # Saturday
-    for strategy in (paper.cfg.strategies.etf_rotation, paper.cfg.strategies.cash_park):
+    for strategy in (paper.cfg.strategies.etf_rotation, paper.cfg.strategies.cash_park, paper.cfg.strategies.orb,
+                     paper.cfg.strategies.vwap_reversion, paper.cfg.strategies.pullback):
         strategy.enabled = True
     assert {s["note"] for s in runner.run().values()} == {"market closed"}
     runner.clock = lambda: NOW
@@ -453,3 +471,121 @@ def test_idle_cash_is_parked_and_resized_around_the_overnight_positions(paper):
     assert "waiting" in StrategyRunner(paper.cfg, data, paper, paper.store.storage)._cash_park(
         broker.now, CAL.session_for(broker.now), ["SPY"])
     assert "on the watchlist" in runner._cash_park(broker.now, CAL.session_for(broker.now), ["SPY", "BOXX"])
+
+
+STRETCH = {"UP": [100.0] * 9 + [99.0], "FLAT": [100.0] * 10}  # UP drops one point after 40 quiet minutes
+
+
+def opening_history(symbols=("UP", "DOWN")):
+    sessions = CAL.sessions_between(datetime(2024, 12, 10).date(), datetime(2025, 1, 6).date())
+    return pd.concat([bars(s, {symbol: [100.0] * 27 for symbol in symbols}, timedelta(minutes=15)) for s in sessions])
+
+
+OPENING = {"UP": [100.0, 100.5, 101.0, 101.2, 101.5], "DOWN": [100.0, 99.5, 99.0, 98.8, 98.9]}
+
+
+def pullbacks(end):
+    """UP: a long uptrend with a sharp two-day dip; DOWN: still rising; FLAT: a dip in a downtrend."""
+    frame = trending(end, {"UP": .2, "DOWN": .2, "FLAT": -.2})
+    for symbol, closes in (("UP", [116.0, 113.0]), ("FLAT", [78.0, 76.0])):
+        rows = frame.index[frame["symbol"] == symbol][-2:]
+        frame.loc[rows, "close"] = closes
+    return frame
+
+
+def test_vwap_orb_and_pullback_signals():
+    at = DAY1.open + 9 * FAST
+    states = vwap_states(bars(DAY1, STRETCH, FAST), at, CAL, 2)
+    assert set(states) == {"UP"}  # FLAT never moved, so it has no deviation to measure
+    up = states["UP"]
+    assert up["side"] == 1 and up["strength"] > 4 and up["stop"] == pytest.approx(99 - (up["vwap"] - 99) / up["strength"])
+    assert not up["long_reverted"] and up["short_reverted"]
+    assert vwap_states(bars(DAY1, STRETCH, FAST), DAY1.open + 5 * FAST, CAL, 2) == {}  # under half an hour
+    assert vwap_states(bars(DAY1, STRETCH, FAST), at, CAL, 5)["UP"]["side"] == 0
+
+    average = opening_volume(opening_history(), 14, CAL)
+    assert average.to_dict() == {"DOWN": 1000, "UP": 1000}
+    assert opening_volume(opening_history(), 30, CAL).empty
+    orb = orb_states(average, bars(DAY1, OPENING, FAST), DAY1.open + 4 * FAST, CAL)
+    assert (orb["UP"]["side"], orb["UP"]["stop"], orb["UP"]["rvol"]) == (1, 100.0, 3.0)
+    assert (orb["DOWN"]["side"], orb["DOWN"]["stop"]) == (0, 100.0)  # falling range, but no close below 98.8 yet
+    assert orb_states(average, bars(DAY1, OPENING, FAST), DAY1.open + 3 * FAST, CAL) == {}  # range still forming
+
+    states = pullback_states(pullbacks(NOW), 200, 10, 5)
+    assert states["UP"]["state"] == "buy" and states["UP"]["rsi"] < 10
+    assert states["DOWN"]["state"] == "sell" and states["FLAT"]["state"] is None
+
+
+def intraday(paper, data, name, **settings):
+    runner = overnight(paper, data, **{name: settings})
+    paper.cfg.strategies.etf_trend.enabled = False
+    return runner
+
+
+def test_vwap_reversion_fades_a_stretch_and_exits_back_at_vwap(paper):
+    broker, data = paper.client, Data()
+    data.fast, data.asks = bars(DAY1, STRETCH, FAST), {"UP": 99.0}
+    broker.now = data.quoted_at = DAY1.open + 9 * FAST + timedelta(seconds=30)
+    runner = intraday(paper, data, "vwap_reversion", symbols=["UP", "FLAT"])
+    status = runner.run()
+    (order,) = broker.posts
+    assert (order["symbol"], order["side"], order["order_class"]) == ("UP", "buy", "oto")
+    assert float(order["stop_loss"]["stop_price"]) < 99 and "1 orders submitted" in status["vwap_reversion"]["note"]
+    intent = paper.open_intents("vwap_reversion")[0]
+    setup = intent["context"]
+    assert setup["at"] == (DAY1.open + 9 * FAST).isoformat()
+    assert setup["price"] < setup["levels"]["Lower band"] < setup["levels"]["Session VWAP"]
+    deadline = datetime.fromisoformat(intent["deadline"]) - broker.now
+    assert timedelta(minutes=60) <= deadline < timedelta(minutes=60, seconds=1)
+    runner.run()
+    assert len(broker.posts) == 1  # one trade per symbol a day
+    broker.fill()
+    paper.maintain(broker.now)
+
+    broker.now = data.quoted_at = broker.now + FAST
+    data.fast = bars(DAY1, {"UP": [*STRETCH["UP"], 100.0]}, FAST)
+    runner.run()
+    assert paper.open_intents("vwap_reversion")[0]["exit_requested"] == "price back at VWAP"
+
+    broker.now = DAY1.close - timedelta(minutes=50)  # too late in the day for a 60-minute reversion
+    assert "no entries" in runner.run()["vwap_reversion"]["note"]
+
+
+def test_orb_buys_a_high_volume_breakout_and_stops_entering_later(paper):
+    broker, data = paper.client, Data()
+    data.fast, data.opening, data.asks = bars(DAY1, OPENING, FAST), opening_history(), {"UP": 101.5}
+    broker.now = data.quoted_at = DAY1.open + 4 * FAST + timedelta(seconds=30)
+    runner = intraday(paper, data, "orb")
+    status = runner.run()
+    assert [(o["symbol"], o["side"], o["stop_loss"]["stop_price"]) for o in broker.posts] == [("UP", "buy", "100.0")]
+    assert "2 in play" in status["orb"]["note"] and "1 breaking out" in status["orb"]["note"]
+    assert paper.open_intents("orb")[0]["deadline"] == (DAY1.close - timedelta(minutes=5)).isoformat()
+
+    # A falling opening range is shorted once a close breaks below its low, with the stop at the range high.
+    broker.now = data.quoted_at = broker.now + FAST
+    data.fast, data.asks = bars(DAY1, {**OPENING, "DOWN": [*OPENING["DOWN"], 98.5]}, FAST), {"DOWN": 98.5}
+    runner.run()
+    assert [(o["symbol"], o["side"], o["stop_loss"]["stop_price"]) for o in broker.posts[1:]] == [("DOWN", "sell", "100.0")]
+    assert paper.open_intents("orb")[1]["side"] == "short"
+
+    broker.now = DAY1.open + timedelta(minutes=121)
+    assert "entries closed" in runner.run()["orb"]["note"]
+
+
+def test_pullback_buys_an_oversold_uptrend_and_sells_the_bounce(paper):
+    broker, data = paper.client, Data()
+    data.daily_frame, data.asks = pullbacks(NOW), {"UP": 113.0}
+    runner = intraday(paper, data, "pullback")
+    status = runner.run()
+    (order,) = broker.posts
+    assert (order["symbol"], order["side"]) == ("UP", "buy") and "order_class" not in order
+    assert float(order["qty"]) * float(order["limit_price"]) <= 1000  # 10% of equity
+    assert "1 of 3 stocks oversold" in status["pullback"]["note"]
+    broker.fill()
+    paper.maintain(broker.now)
+    assert paper.open_intents("pullback")[0]["deadline"] is None  # held overnight
+
+    broker.now = data.quoted_at = DAY2.open + timedelta(minutes=10)
+    data.daily_frame = trending(DAY2.open, {"UP": .2})  # back above its 5-day average
+    runner.run()
+    assert paper.open_intents("pullback")[0]["exit_requested"] == "closed above its 5-day average"

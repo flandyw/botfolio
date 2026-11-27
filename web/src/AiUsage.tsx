@@ -1,23 +1,24 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useState } from "react";
 import { HistogramSeries, LineStyle, type Time } from "lightweight-charts";
 import { type AiUsage as Usage, type AiUsageDay, send } from "./api";
 import { cell, cx } from "./classes";
 import { palette, useChart, useThemeKey } from "./chart";
 import { compact, num, usd } from "./format";
-import { Button, Choice, Message, Section } from "./ui";
+import { Button, Message, Section } from "./ui";
 import { useApi } from "./useApi";
 
 const neurons = (d: AiUsageDay) => d.neurons;
 const vercelUsd = (d: AiUsageDay) => d.vercel_usd;
 const fmtNeurons = (v: number) => compact(v);
 const fmtUsd = (v: number) => usd(v, 4);
-const MODEL: Record<string, string> = { clairic: "Cloudflare", chat: "Vercel", systemone: "Clef" };
+const MODEL: Record<string, string> = { clairic: "Cloudflare", chat: "Chat", chatgpt: "ChatGPT", claude: "Claude", systemone: "Clef", none: "No provider" };
+const PLAN: Record<string, string> = { claude: "Claude", chatgpt: "ChatGPT" };
 const label = (model: string) => {
   const [provider, name] = model.split(":");
   return `${MODEL[provider] ?? provider} · ${name}`;
 };
 
-/** AI spend and volume, plus the model and split choices the worker applies on its next cycle. */
+/** AI spend and volume, plus the provider order and models the worker applies on its next cycle. */
 export function AiUsage() {
   const usage = useApi<Usage>("ai", 60_000);
   const data = usage.data;
@@ -27,6 +28,9 @@ export function AiUsage() {
     { cf: 0, vercel: 0, neurons: 0 },
   );
   const models = data ? perModel(data.days) : [];
+  const vercel = data?.providers.find((p) => p.name === "vercel");
+  const gw = vercel?.label ?? "Vercel";
+  const labelOf = (name: string) => data?.providers.find((p) => p.name === name)?.label ?? name;
 
   return (
     <Section title="AI usage" note="UTC days · Cloudflare's free neuron allowance resets at 00:00 UTC">
@@ -35,25 +39,42 @@ export function AiUsage() {
         !usage.error && <Message>Loading AI usage…</Message>
       ) : (
         <div className="grid gap-6 border-t border-rule pt-3">
-          {data.budget.throttled && (
-            <Message>
-              Vercel returned HTTP {data.budget.throttled.status}
-              {data.budget.throttled.status === 402 ? " (no credit remaining)" : " (rate limited)"}. Routing articles
-              to Cloudflare until {new Date(data.budget.throttled.until).toLocaleTimeString()}.
+          {Object.entries(data.budget.throttled).map(([name, t]) => (
+            <Message key={name}>
+              {labelOf(name)} returned HTTP {t.status}
+              {t.status === 402 ? " (no credit remaining)"
+                : Date.parse(t.until) - Date.parse(t.at) > 1_800_000 ? " (plan usage limit reached)" : " (rate limited)"}.
+              Skipping it until {new Date(t.until).toLocaleTimeString()}; articles go to the next provider in order.
             </Message>
-          )}
+          ))}
           <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-5">
-            <Stat label="Vercel this month" value={usd(data.budget.month_usd)}>
-              <Meter value={data.budget.month_usd} max={data.budget.monthly_usd} label="Vercel spend of the monthly budget" />
-              <span className="text-dim">
-                of {usd(data.budget.monthly_usd)} budget
-                {data.budget.balance != null && ` · ${usd(data.budget.balance)} credit left`}
-              </span>
-            </Stat>
-            <Stat label="Vercel today" value={usd(data.budget.today_usd, 4)}>
-              <Meter value={data.budget.today_usd} max={data.budget.per_day} label="Vercel spend of today's allowance" />
-              <span className="text-dim">of {usd(data.budget.per_day, 3)} today · pace now {usd(data.budget.pace, 3)}</span>
-            </Stat>
+            {Object.entries(data.budget.plans).map(([name, u]) => (
+              <Fragment key={name}>
+                <Stat label={`${PLAN[name] ?? name}, last 5 hours`} value={`${u.five_hour} calls`}>
+                  <Meter value={u.five_hour} max={u.max_five_hour} label={`${PLAN[name] ?? name} calls of the bot's 5-hour cap`} />
+                  <span className="text-dim">of {u.max_five_hour} the bot may use</span>
+                </Stat>
+                <Stat label={`${PLAN[name] ?? name}, last 7 days`} value={`${u.week} calls`}>
+                  <Meter value={u.week} max={u.max_week} label={`${PLAN[name] ?? name} calls of the bot's weekly cap`} />
+                  <span className="text-dim">of {u.max_week} · the plan's own limits also cover your own use</span>
+                </Stat>
+              </Fragment>
+            ))}
+            {vercel?.ready && (
+              <>
+                <Stat label={`${gw} this month`} value={usd(data.budget.month_usd)}>
+                  <Meter value={data.budget.month_usd} max={data.budget.monthly_usd} label={`${gw} spend of the monthly budget`} />
+                  <span className="text-dim">
+                    of {usd(data.budget.monthly_usd)} budget
+                    {data.budget.balance != null && ` · ${usd(data.budget.balance)} credit left`}
+                  </span>
+                </Stat>
+                <Stat label={`${gw} today`} value={usd(data.budget.today_usd, 4)}>
+                  <Meter value={data.budget.today_usd} max={data.budget.per_day} label={`${gw} spend of today's allowance`} />
+                  <span className="text-dim">of {usd(data.budget.per_day, 3)} today · pace now {usd(data.budget.pace, 3)}</span>
+                </Stat>
+              </>
+            )}
             <Stat label="Neurons today" value={compact(today?.neurons ?? 0)}>
               <Meter value={today?.neurons ?? 0} max={data.free_neurons} label="Neurons used of the free daily allowance" />
               <span className="text-dim">of {compact(data.free_neurons)} free</span>
@@ -72,7 +93,7 @@ export function AiUsage() {
               format={fmtNeurons}
               limit={data.free_neurons}
             />
-            <DailyChart title="Vercel spend per day" days={data.days} value={vercelUsd} format={fmtUsd} />
+            {vercel?.ready && <DailyChart title={`${gw} spend per day`} days={data.days} value={vercelUsd} format={fmtUsd} />}
           </div>
 
           {models.length > 0 && (
@@ -108,7 +129,7 @@ export function AiUsage() {
             </div>
           )}
 
-          <Models usage={data} onSaved={usage.reload} />
+          <Providers usage={data} onSaved={usage.reload} />
         </div>
       )}
     </Section>
@@ -205,16 +226,27 @@ function DailyChart({
   );
 }
 
-function Models({ usage, onSaved }: { usage: Usage; onSaved: () => void }) {
+function Providers({ usage, onSaved }: { usage: Usage; onSaved: () => void }) {
   const s = usage.settings;
-  const [primary, setPrimary] = useState(s.primary_model);
-  const [secondary, setSecondary] = useState(s.secondary_model);
-  const saved = s.share === "auto" ? "auto" : Math.round(s.share * 100);
-  const [share, setShare] = useState<"auto" | number>(saved);
+  const byName = Object.fromEntries(usage.providers.map((p) => [p.name, p]));
+  // Enabled providers in priority order, then the rest; unticking one drops it from the order.
+  const initial = () => [...s.order, ...usage.providers.map((p) => p.name).filter((n) => !s.order.includes(n))];
+  const [list, setList] = useState(initial);
+  const [enabled, setEnabled] = useState(() => new Set(s.order));
+  const [models, setModels] = useState(s.models);
   const [monthly, setMonthly] = useState(s.monthly_usd);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ error?: boolean; text: string } | null>(null);
-  const changed = primary !== s.primary_model || secondary !== s.secondary_model || share !== saved || monthly !== s.monthly_usd;
+  const order = list.filter((n) => enabled.has(n));
+  const changed =
+    order.join() !== s.order.join() || JSON.stringify(models) !== JSON.stringify(s.models) || monthly !== s.monthly_usd;
+  const move = (i: number, by: number) =>
+    setList((l) => {
+      const next = [...l];
+      [next[i], next[i + by]] = [next[i + by], next[i]];
+      return next;
+    });
+  const gw = byName.vercel?.label ?? "Vercel";
 
   return (
     <form
@@ -222,10 +254,10 @@ function Models({ usage, onSaved }: { usage: Usage; onSaved: () => void }) {
       onSubmit={(e) => {
         e.preventDefault();
         setBusy(true);
-        send("PUT", "ai", { primary_model: primary, secondary_model: secondary, share: share === "auto" ? "auto" : share / 100, monthly_usd: monthly })
+        send("PUT", "ai", { order, models, monthly_usd: monthly })
           .then(
             () => {
-              setResult({ text: "Saved. The worker applies model changes on its next cycle and records a new experiment." });
+              setResult({ text: "Saved. The worker applies the new order on its next cycle; a model change records a new experiment." });
               onSaved();
             },
             (err: Error) => setResult({ error: true, text: err.message }),
@@ -233,46 +265,79 @@ function Models({ usage, onSaved }: { usage: Usage; onSaved: () => void }) {
           .finally(() => setBusy(false));
       }}
     >
-      <h3 className="text-[14px] font-semibold">Models</h3>
-      <div className="grid gap-4 sm:grid-cols-[repeat(2,minmax(0,1fr))]">
-        <div className="grid content-start gap-2">
-          <span className="text-dim">Cloudflare Workers AI</span>
-          {usage.options.primary.length > 1 ? (
-            <Choice
-              label="Cloudflare model"
-              value={primary}
-              onChange={setPrimary}
-              options={usage.options.primary.map((m) => [m, m] as const)}
-            />
-          ) : (
-            <span>{s.primary_model} (set in .env)</span>
-          )}
-        </div>
-        <label className="grid content-start gap-2">
-          <span className="text-dim">Vercel AI Gateway</span>
-          {s.secondary_ready ? (
-            <select
-              value={secondary}
-              onChange={(e) => setSecondary(e.target.value)}
-              className="num border border-rule bg-bg p-1.5 text-[12px] focus:border-ink focus:outline-none"
-            >
-              {!usage.options.secondary.includes(secondary) && <option value={secondary}>{secondary}</option>}
-              {usage.options.secondary.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <span>Not configured. Set EVENT_AI_SECONDARY_* in .env to enable Vercel AI Gateway.</span>
-          )}
-        </label>
-      </div>
-      {s.secondary_ready && (
+      <h3 className="text-[14px] font-semibold">Providers</h3>
+      <p className="text-dim">
+        Each article goes to the first ticked provider that can take it. Plans stop at the bot's call caps, {gw} at its paced
+        monthly budget and {usage.budget.rpm} requests/minute, and any provider that returns a rate or usage limit is skipped
+        while it cools down. Cloudflare always answers (it bills past its free neurons), so keep it last as the fallback. If
+        none can take an article, the bot does not trade it.
+      </p>
+      <ol className="grid gap-2">
+        {list.map((name, i) => {
+          const p = byName[name];
+          return (
+            <li key={name} className="flex flex-wrap items-center gap-3 border border-rule p-2">
+              <span className="num w-5 text-dim">{enabled.has(name) && p.ready ? order.indexOf(name) + 1 : "–"}</span>
+              <label className="flex min-w-48 flex-1 items-center gap-2">
+                <input
+                  type="checkbox"
+                  disabled={!p.ready}
+                  checked={enabled.has(name)}
+                  onChange={(e) =>
+                    setEnabled((set) => {
+                      const next = new Set(set);
+                      if (e.target.checked) next.add(name);
+                      else next.delete(name);
+                      return next;
+                    })
+                  }
+                />
+                <span>{p.label}</span>
+              </label>
+              {p.ready ? (
+                p.options.length > 1 ? (
+                  <select
+                    value={models[name]}
+                    onChange={(e) => setModels({ ...models, [name]: e.target.value })}
+                    aria-label={`${p.label} model`}
+                    className="num border border-rule bg-bg p-1.5 text-[12px] focus:border-ink focus:outline-none"
+                  >
+                    {!p.options.includes(models[name]) && <option value={models[name]}>{models[name]}</option>}
+                    {p.options.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="num text-dim">{models[name]}</span>
+                )
+              ) : (
+                <span className="text-dim">Not configured in .env</span>
+              )}
+              <span className="flex gap-1">
+                {([-1, 1] as const).map((by) => (
+                  <button
+                    key={by}
+                    type="button"
+                    disabled={i + by < 0 || i + by >= list.length}
+                    onClick={() => move(i, by)}
+                    aria-label={`Move ${p.label} ${by < 0 ? "up" : "down"}`}
+                    className="border border-rule px-2 py-1 hover:border-ink disabled:cursor-not-allowed disabled:border-hair disabled:text-faint"
+                  >
+                    {by < 0 ? "↑" : "↓"}
+                  </button>
+                ))}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      {byName.vercel?.ready && (
         <label className="grid gap-2">
           <span className="text-dim">
-            Vercel monthly budget: <span className="num text-ink">{usd(monthly)}</span>
-            {monthly > 5 && " (above the $5/month free credit; overage is billed)"}
+            {gw} monthly budget: <span className="num text-ink">{usd(monthly)}</span>
+            {gw === "Vercel" && monthly > 5 && " (above the $5/month free credit; overage is billed)"}
           </span>
           <input
             type="range"
@@ -281,64 +346,23 @@ function Models({ usage, onSaved }: { usage: Usage; onSaved: () => void }) {
             step={0.5}
             value={monthly}
             onChange={(e) => setMonthly(Number(e.target.value))}
-            aria-label="Vercel spend per month in US dollars"
+            aria-label={`${gw} spend per month in US dollars`}
             className="w-full max-w-md accent-(--ink)"
           />
         </label>
       )}
-      {s.secondary_ready && (
-        <div className="grid gap-2">
-          <span className="text-dim">Split</span>
-          <Choice
-            label="Split mode"
-            value={share === "auto" ? "auto" : "fixed"}
-            onChange={(v) => setShare(v === "auto" ? "auto" : 40)}
-            options={[
-              ["auto", "Auto: pace the monthly budget"],
-              ["fixed", "Fixed share"],
-            ]}
-          />
-          {share === "auto" ? (
-            <p className="text-dim">
-              Vercel handles articles while spend stays within an even pace toward {usd(monthly)}/month; unused budget
-              carries forward. Cloudflare handles the rest within its free neuron allowance, with Vercel taking
-              overflow once free neurons run out.
-            </p>
-          ) : (
-            <label className="grid gap-2">
-              <span className="num">
-                {100 - share}% Cloudflare / {share}% Vercel
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={5}
-                value={share}
-                onChange={(e) => setShare(Number(e.target.value))}
-                aria-label="Vercel share of articles"
-                className="w-full max-w-md accent-(--ink)"
-              />
-            </label>
-          )}
-          <p className="text-dim">
-            In both modes, Vercel stops at the daily budget, at {usage.budget.rpm} requests/minute, and during
-            cooldown after a 429 rate limit or 402 empty balance; overflow routes to Cloudflare.
-          </p>
-        </div>
-      )}
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" disabled={busy || !changed}>
-          Save models
+        <Button type="submit" disabled={busy || !changed || order.length === 0}>
+          Save providers
         </Button>
         {changed && (
           <button
             type="button"
             className="text-[13px] text-dim underline underline-offset-4"
             onClick={() => {
-              setPrimary(s.primary_model);
-              setSecondary(s.secondary_model);
-              setShare(saved);
+              setList(initial());
+              setEnabled(new Set(s.order));
+              setModels(s.models);
               setMonthly(s.monthly_usd);
             }}
           >

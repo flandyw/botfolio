@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import { Activity } from "./Activity";
 import { type AlpacaSnapshotsResponse, type AlpacaStatus, type Config, LOCKED, type Live, savedPassword } from "./api";
 import { cx } from "./classes";
 import { Control } from "./Control";
 import { Desk } from "./Desk";
 import { ago, etDayTime, etTime } from "./format";
 import { Markets } from "./Markets";
-import { NewsAudit } from "./NewsAudit";
+import { NewsPage } from "./NewsReview";
 import { Performance } from "./Performance";
 import { Message } from "./ui";
 import { Unlock } from "./Unlock";
@@ -13,9 +14,9 @@ import { useAlpacaStream } from "./useAlpacaStream";
 import { useApi } from "./useApi";
 
 type Theme = "dark" | "light";
-const VIEWS = ["desk", "performance", "markets", "news", "control"] as const;
+const VIEWS = ["desk", "activity", "performance", "markets", "news", "control"] as const;
 type View = (typeof VIEWS)[number];
-type Route = { view: View; symbol: string };
+type Route = { view: View; symbol: string; trade: string };
 
 function initialTheme(): Theme {
   try {
@@ -27,16 +28,20 @@ function initialTheme(): Theme {
   return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-/** The first hash segment selects a page; Markets also accepts a symbol. */
+/** Markets accepts a symbol and Activity accepts a journal key. */
 function readRoute(): Route {
   const [view, raw = ""] = location.hash.replace(/^#\/?/, "").split("/");
-  let symbol = "";
+  let selection = "";
   try {
-    symbol = decodeURIComponent(raw).toUpperCase();
+    selection = decodeURIComponent(raw);
   } catch {
     // a malformed link opens the page without a symbol
   }
-  return { view: VIEWS.find((v) => v === view) ?? "desk", symbol: view === "markets" ? symbol : "" };
+  return {
+    view: VIEWS.find((v) => v === view) ?? "desk",
+    symbol: view === "markets" ? selection.toUpperCase() : "",
+    trade: view === "activity" ? selection : "",
+  };
 }
 
 export default function App() {
@@ -104,6 +109,7 @@ export default function App() {
           {(
             [
               ["desk", "Desk", "#/desk"],
+              ["activity", "Activity", "#/activity"],
               ["performance", "Performance", "#/performance"],
               ["markets", "Markets", "#/markets"],
               ["news", "News", "#/news"],
@@ -148,10 +154,12 @@ export default function App() {
       <main className="py-6">
         {config.error && <Message error>{config.error}</Message>}
         {status.error && <Message error>{status.error}</Message>}
-        {(route.view === "news" || route.view === "control") && locked ? (
+        {(route.view === "news" || route.view === "control" || route.view === "activity") && locked ? (
           <Unlock onUnlock={() => setUnlocked(true)} />
+        ) : route.view === "activity" ? (
+          <Activity trade={route.trade} />
         ) : route.view === "news" ? (
-          <NewsAudit onOpen={openSymbol} />
+          <NewsPage onOpen={openSymbol} />
         ) : route.view === "control" ? (
           config.data ? (
             <Control
@@ -161,7 +169,6 @@ export default function App() {
                 live.reload();
                 config.reload();
               }}
-              onOpen={openSymbol}
             />
           ) : (
             <Message>Loading…</Message>
@@ -172,6 +179,7 @@ export default function App() {
             liveError={live.error ?? null}
             status={status.data ?? null}
             etfs={etfs.length}
+            benchmarks={config.data?.benchmarks}
             onOpen={openSymbol}
           />
         ) : route.view === "performance" ? (

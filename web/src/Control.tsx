@@ -1,31 +1,18 @@
 import { useState } from "react";
 import { AiUsage } from "./AiUsage";
-import { type Config, type JournalRow, type Live, send } from "./api";
-import { cell, cx } from "./classes";
-import { etDateTime, num } from "./format";
-import { Button, Message, Section, SymbolLink } from "./ui";
-import { useApi } from "./useApi";
-
-const STRATEGY: Record<string, string> = {
-  news: "News + AI",
-  momentum: "Momentum",
-  etf_trend: "ETF trend",
-  etf_rotation: "ETF rotation",
-  cash_park: "Parked cash",
-};
+import { type BenchmarkSettings, type Config, type Live, send } from "./api";
+import { cx } from "./classes";
+import { Button, Message, Section } from "./ui";
 
 export function Control({
   live,
   config,
   onChange,
-  onOpen,
 }: {
   live: Live | null;
   config: Config;
   onChange: () => void;
-  onOpen: (symbol: string) => void;
 }) {
-  const journal = useApi<JournalRow[]>("orders", 15_000);
   const [dedicated, setDedicated] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -139,53 +126,77 @@ export function Control({
         <Watchlist config={config} onSaved={onChange} />
       </div>
 
-      <AiUsage />
+      <BenchmarkSettingsForm settings={config.benchmarks} onSaved={onChange} />
 
-      <Section title="Order journal" note={journal.data ? String(journal.data.length) : undefined}>
-        {journal.error && <Message error>{journal.error}</Message>}
-        {journal.data?.length === 0 && (
-          <Message>No orders recorded yet. Orders appear here once a strategy triggers.</Message>
-        )}
-        {journal.data && journal.data.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] border-collapse text-[13px]">
-              <thead>
-                <tr>
-                  <th className={cell.th}>Opened (ET)</th>
-                  <th className={cell.th}>Strategy</th>
-                  <th className={cell.th}>Symbol</th>
-                  <th className={cell.th}>Side</th>
-                  <th className={cx(cell.th, cell.right)}>Qty</th>
-                  <th className={cx(cell.th, cell.right)}>Limit</th>
-                  <th className={cx(cell.th, cell.right)}>Stop</th>
-                  <th className={cell.th}>State</th>
-                  <th className={cell.th}>Broker</th>
-                  <th className={cell.th}>Note</th>
-                </tr>
-              </thead>
-              <tbody>
-                {journal.data.map((row) => (
-                  <tr key={row.key} className={row.state === "closed" ? "text-dim" : ""}>
-                    <td className={cx(cell.td, "num whitespace-nowrap")}>{etDateTime(row.opened)}</td>
-                    <td className={cell.td}>{STRATEGY[row.strategy] ?? row.strategy}</td>
-                    <td className={cell.td}>
-                      <SymbolLink symbol={row.symbol} onOpen={onOpen} />
-                    </td>
-                    <td className={cell.td}>{row.side ?? "—"}</td>
-                    <td className={cx(cell.td, cell.right)}>{row.qty ?? "—"}</td>
-                    <td className={cx(cell.td, cell.right)}>{num(row.limit)}</td>
-                    <td className={cx(cell.td, cell.right)}>{num(row.stop)}</td>
-                    <td className={cell.td}>{row.state}</td>
-                    <td className={cell.td}>{row.broker_status?.replace("_", " ") ?? "—"}</td>
-                    <td className={cell.td}>{row.exit_requested ?? row.error ?? ""}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Section>
+      <AiUsage />
     </div>
+  );
+}
+
+function BenchmarkSettingsForm({ settings, onSaved }: { settings: BenchmarkSettings; onSaved: () => void }) {
+  const [purchaseDate, setPurchaseDate] = useState(settings.purchase_date ?? "");
+  const [rate, setRate] = useState(String(settings.annual_rate_pct));
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ error: boolean; text: string } | null>(null);
+  const inputClass = "num border border-rule bg-transparent px-2 py-1 text-[13px] text-ink";
+
+  return (
+    <Section title="Desk benchmarks">
+      <form
+        className="border-t border-rule pt-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setBusy(true);
+          setResult(null);
+          send<BenchmarkSettings>("PUT", "desk-benchmarks", {
+            purchase_date: purchaseDate || null,
+            annual_rate_pct: Number(rate),
+          })
+            .then(
+              () => {
+                setResult({ error: false, text: "Benchmark settings saved." });
+                onSaved();
+              },
+              (err: Error) => setResult({ error: true, text: err.message }),
+            )
+            .finally(() => setBusy(false));
+        }}
+      >
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="grid gap-1 text-[13px] text-dim">
+            Start date
+            <input
+              type="date"
+              className={inputClass}
+              disabled={busy}
+              value={purchaseDate}
+              onChange={(e) => setPurchaseDate(e.target.value)}
+            />
+          </label>
+          <label className="grid gap-1 text-[13px] text-dim">
+            Savings rate (% p.a.)
+            <input
+              type="number"
+              min="0"
+              step="any"
+              required
+              disabled={busy}
+              className={`w-28 ${inputClass}`}
+              value={rate}
+              onChange={(e) => setRate(e.target.value)}
+            />
+          </label>
+          <Button type="submit" disabled={busy}>
+            Save benchmarks
+          </Button>
+        </div>
+        <p className="mt-2 text-[13px] text-dim">
+          QQQ and VGT use the first available session’s opening price and adjust for dividends and splits.
+          Savings uses an effective annual rate from the start date. Leave the date blank to hide benchmarks.
+        </p>
+        {result && <div role="status"><Message error={result.error}>{result.text}</Message></div>}
+      </form>
+    </Section>
   );
 }
 

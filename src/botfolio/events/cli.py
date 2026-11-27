@@ -13,14 +13,27 @@ from botfolio.config import watchlist as load_watchlist
 from botfolio.data.alpaca import AlpacaClient
 from botfolio.data.calendar import frame_to_bars, get_calendar
 from botfolio.events.ai import Router
-from botfolio.events.context import market_context
-from botfolio.events.paper import PaperExecutor, configured, event_is_fresh
+from botfolio.events.context import market_context, news_context, since_prev_close
+from botfolio.events.paper import PaperExecutor, configured, entry_ready, event_is_fresh
 from botfolio.events.providers import ISSUER_FEEDS, AlpacaNews, IssuerNews, SECFilings, YahooNews
+from botfolio.events.risk import risk_loop
 from botfolio.events.store import EventStore
+from botfolio.safety import PAPER_TRADING_URL
 from botfolio.storage import Storage
 from botfolio.strategies import StrategyRunner, strategy_loop
 
 log = logging.getLogger(__name__)
+_companies: dict = {}
+
+
+def company(client, ticker):
+    """The listed company's name, so the AI can tell it from namesakes (RTX Corp vs RTX A/S). Cached."""
+    if ticker not in _companies:
+        try:
+            _companies[ticker] = client._request("GET", f"{PAPER_TRADING_URL}/v2/assets/{ticker}")["name"]
+        except Exception:
+            return None  # retried on the next article
+    return _companies[ticker]
 
 
 def command(cfg, args):
@@ -42,9 +55,9 @@ async def execution_monitor(paper, store, once=False):
     """Exits have their own worker and client; news and AI latency cannot hold this loop up."""
     while True:
         now = datetime.now(UTC)
-        session = get_calendar("NASDAQ").session_for(now)
+        session = get_calendar("NASDAQ").extended_session_for(now)  # news may enter pre-market/after-hours
         status = dict(at=now.isoformat(), enabled=configured(), armed=bool(store.storage.get("event-paper-armed")),
-                      market_open=session is not None, phase="analysis only")
+                      market_open=get_calendar("NASDAQ").session_for(now) is not None, phase="analysis only")
         try:
             if configured():
                 active = await asyncio.to_thread(paper.maintain, now)
@@ -69,10 +82,11 @@ async def watch(cfg, store, experiment, once=False):
     yahoo = YahooNews(cfg.symbols)
     router = Router(experiment)
     paper = PaperExecutor(AlpacaClient(creds, timeout=5, max_retries=1), store,
-                          int(os.getenv("EVENT_HOLD_MINUTES", "15")), cfg.limits())
+                          int(os.getenv("EVENT_HOLD_MINUTES", "15")), cfg.limits(), cfg.data.feed)
     runner = StrategyRunner(cfg, AlpacaClient(creds, timeout=15, max_retries=2), paper, store.storage)
     tasks = [] if once else [asyncio.create_task(execution_monitor(paper, store)),
-                             asyncio.create_task(strategy_loop(runner))]
+                             asyncio.create_task(strategy_loop(runner)),
+                             asyncio.create_task(risk_loop(store.storage))]
     try:
         while True:
             now = datetime.now(UTC)
@@ -114,6 +128,7 @@ async def watch(cfg, store, experiment, once=False):
                         bars_df = await asyncio.to_thread(client.get_bars, [event.ticker, "SPY"],
                             event.received_at-timedelta(hours=2), event.received_at, "1Min", cfg.data.feed, "raw")
                         context = market_context(frame_to_bars(bars_df, get_calendar()), event, event.received_at)
+                        context.update(news_context(event, events, await asyncio.to_thread(company, client, event.ticker)))
                         await asyncio.to_thread(router.analyze, store, event, context)
                         store.storage.put("news-assess-last", datetime.now(UTC).isoformat())
                 for event in sorted(events, key=lambda e: e.content_at, reverse=True):
@@ -125,10 +140,18 @@ async def watch(cfg, store, experiment, once=False):
                         bars_df = await asyncio.to_thread(client.get_bars, [event.ticker, "SPY"],
                             event.received_at-timedelta(hours=2), event.received_at, "1Min", cfg.data.feed, "raw")
                         context = market_context(frame_to_bars(bars_df, get_calendar()), event, event.received_at)
+                        try:
+                            snapshots = await asyncio.to_thread(client._request, "GET",
+                                "https://data.alpaca.markets/v2/stocks/snapshots",
+                                params={"symbols": f"{event.ticker},SPY,QQQ", "feed": cfg.data.feed})
+                            context.update(since_prev_close(snapshots, event.ticker))
+                        except Exception:
+                            log.warning("snapshot unavailable; deciding without the move since the close")
+                        context.update(news_context(event, events, await asyncio.to_thread(company, client, event.ticker)))
                         decision = await asyncio.to_thread(router.analyze, store, event, context)
                     state = store.storage.get("event-execution-state") or {}
                     if (cfg.strategies.news.enabled and configured() and state.get("phase") == "ready" and not failures
-                        and not event.source.startswith("rss:")
+                        and entry_ready(event, now)  # no quote calls while the entry waits
                         and (not decision[2].startswith("clairic:")
                              or decision[0].recommended_action in {"BUY", "SELL"})):
                         data = await asyncio.to_thread(client._request, "GET",

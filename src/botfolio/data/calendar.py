@@ -56,6 +56,12 @@ class MarketCalendar:
             return None
         return s
 
+    def extended_session_for(self, ts: datetime) -> Session | None:
+        """The tradeable extended window (see ``extended``) containing ``ts``, else None."""
+        s = self.session(pd.Timestamp(ts).tz_convert("America/New_York").date())
+        s = s and extended(s)
+        return s if s and s.open <= ts < s.close else None
+
     def sessions_between(self, start: date, end: date) -> list[Session]:
         out = []
         d = start
@@ -68,6 +74,15 @@ class MarketCalendar:
 
     def is_open(self, ts: datetime) -> bool:
         return self.session_for(ts) is not None
+
+
+def extended(s: Session) -> Session:
+    """The extended window the bot can price: IEX quotes from 08:00 ET (regular open is always 09:30 ET) to the close.
+
+    shortcut: Alpaca accepts orders 04:00-20:00 ET, but IEX (the only feed this account has) quotes nothing
+    outside 08:00-16:00; widen to open-5h30m / close+4h with a SIP subscription.
+    """
+    return Session(s.day, s.open - timedelta(hours=1, minutes=30), s.close)
 
 
 def ny_date(ts: datetime) -> date:

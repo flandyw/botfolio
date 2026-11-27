@@ -6,14 +6,14 @@ import pandas as pd
 import pytest
 from pydantic import ValidationError
 
-from botfolio.events.ai import AI, abstain, analyze
+from botfolio.events.ai import AI, Throttled, abstain, analyze
 from botfolio.events.context import market_context
 from botfolio.events.models import Decision, Event
 from botfolio.events.paper import PaperExecutor
 from botfolio.events.store import EventStore
 from botfolio.storage import Storage
 
-AT = datetime(2025, 1, 6, 14, 30, tzinfo=UTC)
+AT = datetime(2025, 1, 6, 14, 45, tzinfo=UTC)  # 09:45 ET, after the opening wait
 
 
 def event(**kwargs):
@@ -68,6 +68,21 @@ def test_decision_rejects_identity_and_invented_evidence():
     assert decision(e).model_copy(update={"materiality": "low"}).side() == 0
     assert decision(e).model_copy(update={"uncertainty": "high", "recommended_action": "WAIT"}).side() == 1
     assert decision(e).model_copy(update={"directional_hypothesis": "bearish", "recommended_action": "WAIT"}).side() == -1
+    assert decision(e).model_copy(update={"recommended_action": "HOLD"}).side() == 0
+
+
+def test_since_prev_close():
+    from botfolio.events.context import since_prev_close
+    def bars(price, today, prev):
+        return {"latestTrade": {"p": price, "t": "2026-11-25T13:19:26.123456789Z"},  # 08:19 ET, pre-market
+                "dailyBar": {"t": "2026-11-24T05:00:00Z", "c": today}, "prevDailyBar": {"t": "2026-11-23T05:00:00Z", "c": prev}}
+    snap = {"NVDA": bars(95, 100, 120), "SPY": bars(198, 200, 300)}
+    move = since_prev_close(snap, "NVDA")
+    assert round(move["since_prev_close"], 4) == -.05 and round(move["market_since_prev_close"], 4) == -.01
+    snap["NVDA"]["dailyBar"]["t"] = "2026-11-25T05:00:00Z"  # mid-session: today's bar is still forming
+    snap["NVDA"]["latestTrade"]["t"] = "2026-11-25T15:00:00Z"
+    assert round(since_prev_close(snap, "NVDA")["since_prev_close"], 4) == round(95/120-1, 4)
+    assert since_prev_close({}, "NVDA")["since_prev_close"] is None
 
 
 def test_no_future_context():
@@ -100,8 +115,9 @@ def test_paper_endpoint_guard(monkeypatch):
     client._request.assert_not_called()
 
 
+@pytest.mark.parametrize("cash", ["10000", "-2000"])  # negative: cash parked in BOXX must not block entries
 @pytest.mark.parametrize("bias", ["bullish", "bearish"])
-def test_paper_journal_is_reserved_before_submit(monkeypatch, bias):
+def test_paper_journal_is_reserved_before_submit(monkeypatch, bias, cash):
     monkeypatch.setenv("EVENT_PAPER_ENABLED", "true")
     monkeypatch.setenv("EVENT_EXCLUSIVE_ACCOUNT", "true")
     now = datetime.now(UTC)
@@ -109,10 +125,11 @@ def test_paper_journal_is_reserved_before_submit(monkeypatch, bias):
     store = EventStore(Storage(":memory:"))
     store.storage.put("event-paper-armed", True)
     client = Mock()
-    client.get_paper_account.return_value = {"equity": "10000", "cash": "10000", "status": "ACTIVE"}
+    client.get_paper_account.return_value = {"equity": "10000", "cash": cash, "buying_power": "20000",
+                                             "status": "ACTIVE"}
     paper = PaperExecutor(client, store)
     monkeypatch.setattr("botfolio.events.paper.get_calendar", lambda *a: Mock(session_for=lambda t:
-        Mock(close=now+timedelta(hours=1))))
+        Mock(open=now-timedelta(hours=1), close=now+timedelta(hours=1))))
     paper._maintain = Mock(return_value=[])
     def request(method, path, **kwargs):
         if path == "clock":
@@ -120,15 +137,19 @@ def test_paper_journal_is_reserved_before_submit(monkeypatch, bias):
         if method == "POST":
             assert paper.intents()[0][1]["state"] == "reserved"
             body = kwargs["json"]
-            assert body["order_class"] == "bracket"
+            assert body["order_class"] == "oto" and "take_profit" not in body
             assert float(body["qty"])*float(body["limit_price"]) <= 2500
-            stop, tp, limit = (float(body[k]["stop_price" if k == "stop_loss" else "limit_price"])
-                               if k != "limit_price" else float(body[k]) for k in ("stop_loss", "take_profit", "limit_price"))
+            stop, limit = float(body["stop_loss"]["stop_price"]), float(body["limit_price"])
             sign = 1 if bias == "bullish" else -1
-            assert body["side"] == ("buy" if sign == 1 else "sell") and stop*sign < limit*sign < tp*sign
+            assert body["side"] == ("buy" if sign == 1 else "sell")
+            assert limit == (100.4 if sign == 1 else 99.59) and stop == round(limit*(1-sign*.02), 2)
             raise TimeoutError("ambiguous response")
         return []
     paper.request = request
+    quote = {"t": now.isoformat(), "bp": 99.99, "ap": 100}
+    assert paper.enter(e, decision(e).model_copy(update={"materiality": "medium"}), quote, now) == "abstain: not high materiality"
+    yahoo = event(mode="forward", published_at=now, content_at=now, received_at=now, source="rss:feeds.finance.yahoo.com")
+    assert "Yahoo" in paper.enter(yahoo, decision(yahoo), quote, now)
     with pytest.raises(TimeoutError):
         paper.enter(e, decision(e).model_copy(update={"directional_hypothesis": bias, "recommended_action": "WAIT"}), {"t": now.isoformat(), "bp": 99.99, "ap": 100}, now)
     assert paper.intents()[0][1]["state"] == "reserved"
@@ -146,10 +167,35 @@ def test_chat_adapter_and_malformed_response_audit(monkeypatch):
     monkeypatch.setattr("botfolio.events.ai.requests.post", post)
     assert AI().evaluate(e, {})[0] == decision(e)
     assert post.call_args.kwargs["timeout"] == (10, 30.)
+    fenced = "```json\n" + decision(e).model_dump_json() + "\n```"  # how free OpenRouter models often answer
+    response.json.return_value = {"choices": [{"message": {"content": fenced}}]}
+    assert AI().evaluate(e, {})[0] == decision(e)
     response.json.return_value = {"invalid": "retained in audit"}
     store = EventStore(Storage(":memory:"))
     assert analyze(store, e, "bad-output", AI(), {})[0].side() == 0
     assert "retained in audit" in store.audit().response.iloc[0]
+
+
+def test_chatgpt_sidecar_adapter(monkeypatch):
+    monkeypatch.setenv("EVENT_AI_PROVIDER", "chatgpt")
+    monkeypatch.setenv("EVENT_AI_MODEL", "gpt-fixture")
+    monkeypatch.setenv("EVENT_AI_URL", "https://example.com/respond")
+    with pytest.raises(ValueError):  # only the loopback sidecar holds ChatGPT credentials
+        AI()
+    monkeypatch.setenv("EVENT_AI_URL", "http://127.0.0.1:8611/respond")
+    e = event()
+    response = Mock(status_code=200, text="fixture")
+    response.json.return_value = {"text": decision(e).model_dump_json()}
+    post = Mock(return_value=response)
+    monkeypatch.setattr("botfolio.events.ai.requests.post", post)
+    assert AI().evaluate(e, {})[0] == decision(e)
+    assert set(post.call_args.kwargs["json"]) == {"model", "input", "instructions"}
+    restated = decision(e).model_dump(mode="json") | {"ticker": "nvda", "event_timestamp": "2026-01-01T00:00:00Z"}
+    response.json.return_value = {"text": json.dumps(restated)}
+    assert AI().evaluate(e, {})[0] == decision(e)  # identity comes from the event, not the model's restatement
+    response.status_code, response.headers = 429, {}
+    with pytest.raises(Throttled):
+        AI().evaluate(e, {})
 
 
 def test_systemone_adapter(monkeypatch):
@@ -177,7 +223,8 @@ def test_news_provider_pagination_and_revisions():
                    updated_at=(AT+timedelta(seconds=1)).isoformat(), source="fixture",
                    url="https://example.com/1", headline="Earnings", content="<p>Original</p>")
     blank = dict(article, id=2, headline="<br>", content=None, summary="")
-    client._request.side_effect = [{"news": [blank], "next_page_token": "page2"}, {"news": [article]}]
+    insecure = dict(article, id=3, url="http://example.com/3")
+    client._request.side_effect = [{"news": [blank, insecure], "next_page_token": "page2"}, {"news": [article]}]
     rows = AlpacaNews(client, ["SPY"]).fetch(AT, AT+timedelta(days=1))
     assert len(rows) == 1
     assert rows[0].ticker == "SPY"
@@ -241,14 +288,20 @@ def test_experiment_change_rejected():
         store.freeze_experiment("fixed", {"model": "b"})
 
 
-def test_forward_after_hours_pending_until_next_open():
+def test_news_outside_regular_hours_waits_for_the_open():
     from botfolio.events.paper import event_is_fresh
-    after = AT.replace(hour=22)
-    e = event(mode="forward", published_at=after, content_at=after, received_at=after)
-    next_open = AT+timedelta(days=1)
-    assert event_is_fresh(e, next_open)
-    assert event_is_fresh(e, next_open+timedelta(minutes=4))
-    assert not event_is_fresh(e, next_open+timedelta(minutes=6))
+    regular_open = AT.replace(day=7, hour=14, minute=30)  # 09:30 ET
+    for at in (AT.replace(hour=22), AT.replace(day=7, hour=11), AT.replace(day=7, hour=13, minute=10)):  # 17:00, 06:00, 08:10 ET
+        e = event(mode="forward", published_at=at, content_at=at, received_at=at)
+        assert event_is_fresh(e, regular_open+timedelta(minutes=4))
+        assert not event_is_fresh(e, regular_open+timedelta(minutes=6))
+
+
+def test_issuer_rss_tolerates_ten_minute_feed_lag():
+    from botfolio.events.paper import event_is_fresh
+    lagged = dict(mode="forward", published_at=AT, content_at=AT, received_at=AT+timedelta(minutes=7))
+    assert event_is_fresh(event(**lagged, source="rss:nvidianews.nvidia.com"), AT+timedelta(minutes=8))
+    assert not event_is_fresh(event(**lagged, source="rss:feeds.finance.yahoo.com"), AT+timedelta(minutes=8))
 
 
 def test_yahoo_news_round_robins_watchlist():
@@ -262,24 +315,23 @@ def test_yahoo_news_round_robins_watchlist():
     assert [u.split("s=")[1].split("&")[0] for u in urls] == ["AAPL", "BRK-B", "MSFT", "AAPL"]
 
 
-def router_env(monkeypatch, share=None):
+def router_env(monkeypatch, order=("vercel", "cloudflare")):
     from botfolio.events.ai import Router
 
+    for name in ("CLAUDE", "CHATGPT"):
+        monkeypatch.delenv(f"EVENT_AI_{name}_MODEL", raising=False)
     monkeypatch.setenv("EVENT_AI_PROVIDER", "clairic")
     monkeypatch.setenv("EVENT_AI_MODEL", "clairic")
     monkeypatch.setenv("EVENT_AI_URL", "https://cf.example/ai/run/@cf/cloudflare/clairic")
     monkeypatch.setenv("EVENT_AI_KEY", "k")
-    monkeypatch.setenv("EVENT_AI_SECONDARY_PROVIDER", "chat")
-    monkeypatch.setenv("EVENT_AI_SECONDARY_MODEL", "meta/muse-ember")
-    monkeypatch.setenv("EVENT_AI_SECONDARY_URL", "https://vercel.example/v1/chat/completions")
-    monkeypatch.setenv("EVENT_AI_SECONDARY_KEY", "k")
-    monkeypatch.setenv("EVENT_AI_SECONDARY_EXPERIMENT", "muse-v1")
+    monkeypatch.setenv("EVENT_AI_VERCEL_MODEL", "meta/muse-ember")
+    monkeypatch.setenv("EVENT_AI_VERCEL_URL", "https://vercel.example/v1/chat/completions")
+    monkeypatch.setenv("EVENT_AI_VERCEL_KEY", "k")
+    monkeypatch.setenv("EVENT_AI_VERCEL_EXPERIMENT", "muse-v1")
     monkeypatch.setenv("EVENT_AI_MONTHLY_USD", "5")
-    if share is None:
-        monkeypatch.delenv("EVENT_AI_SECONDARY_SHARE", raising=False)
-    else:
-        monkeypatch.setenv("EVENT_AI_SECONDARY_SHARE", share)
-    return Router("clairic-v2")
+    router = Router("clairic-v2")
+    router.configure({"order": list(order)})
+    return router
 
 
 def spent(store, model, response, cost=None):
@@ -288,60 +340,105 @@ def spent(store, model, response, cost=None):
             f"{model}{cost}{json.dumps(response)}", "x", model, "{}", "{}", json.dumps(response), 1.0, cost, datetime.now(UTC).isoformat()))
 
 
-def test_router_fixed_share_splits_articles(monkeypatch):
-    router, store = router_env(monkeypatch, "0.4"), EventStore(Storage(":memory:"))
-    picks = [router.use_secondary(store, event(source_id=str(i)), now=i * 60.0) for i in range(500)]
-    assert 150 < sum(picks) < 250
-    same = event(source_id="7")
-    assert router.use_secondary(store, same, now=1e6) == router.use_secondary(store, same, now=2e6)
-
-
 def test_router_paces_budget_and_overflows_free_neurons(monkeypatch):
     router, store = router_env(monkeypatch), EventStore(Storage(":memory:"))
-    assert router.share == "auto" and router.use_secondary(store, event(), now=0)
+    assert router.ready("vercel", store, now=0)
     spent(store, "chat:meta/muse-ember", {}, cost=1.0)  # far over today's pace
-    assert not router.use_secondary(store, event(), now=100)
+    assert not router.ready("vercel", store, now=100)
     spent(store, "clairic:clairic", {"result": {"usage": {"input_tokens": 2_000_000}}})  # past the free neurons
-    assert router.use_secondary(store, event(), now=200)
-    router.configure({"monthly_usd": 20})  # a bigger budget from the control page reopens Vercel
-    assert router.use_secondary(store, event(), now=300)
+    assert router.ready("vercel", store, now=200)
+    router.configure({"order": router.order, "monthly_usd": 20})  # a bigger budget from the control page
+    assert router.ready("vercel", store, now=300)
     spent(store, "chat:meta/muse-ember", {}, cost=19.5)  # the month's credit is gone
-    assert not router.use_secondary(store, event(), now=400)
+    assert not router.ready("vercel", store, now=400) and router.ready("cloudflare", store, now=400)
 
 
 def test_router_caps_rate_and_falls_back_when_throttled(monkeypatch):
-    from botfolio.events.ai import Throttled
-
     router, store = router_env(monkeypatch), EventStore(Storage(":memory:"))
     router.calls = [0.0] * router.rpm
-    assert not router.use_secondary(store, event(), now=1)
-    assert router.use_secondary(store, event(), now=61)
+    assert not router.ready("vercel", store, now=1)
+    assert router.ready("vercel", store, now=61)
     router.calls = []
-    router.secondary.evaluate = Mock(side_effect=Throttled(429, 120))
-    router.primary.evaluate = Mock(side_effect=lambda e, c: (abstain(e, "fallback"), {}, {}))
+    router.ai["vercel"].evaluate = Mock(side_effect=Throttled(429, 120))
+    router.ai["cloudflare"].evaluate = Mock(side_effect=lambda e, c: (abstain(e, "fallback"), {}, {}))
     decision = router.analyze(store, event(), {})
-    assert decision[2] == "clairic:clairic" and store.storage.get("ai-throttled")["status"] == 429
-    assert not router.use_secondary(store, event(source_id="2"))
+    assert decision[2] == "clairic:clairic" and store.storage.get("ai-throttled")["vercel"]["status"] == 429
+    assert not router.ready("vercel", store)
     assert router.decision(store, event()) is not None
 
 
-def test_router_applies_saved_models(monkeypatch):
-    from botfolio.events.ai import Router
+def test_router_follows_priority_order(monkeypatch):
+    router, store = router_env(monkeypatch, order=("cloudflare", "vercel")), EventStore(Storage(":memory:"))
+    for ai in router.ai.values():
+        ai.evaluate = Mock(side_effect=lambda e, c: (abstain(e, "x"), {}, {}))
+    assert router.analyze(store, event(), {})[2] == "clairic:clairic"
+    router.configure({"order": ["vercel"]})
+    for ai in router.ai.values():
+        ai.evaluate = Mock(side_effect=lambda e, c: (abstain(e, "x"), {}, {}))
+    assert router.analyze(store, event(source_id="2"), {})[2] == "chat:meta/muse-ember"
+    spent(store, "chat:meta/muse-ember", {}, cost=19.5)  # Vercel spent out and Cloudflare left out of the order
+    assert router.analyze(store, event(source_id="3"), {})[2] == "none:none"
+    assert router.decision(store, event(source_id="3"))[0].recommended_action == "WAIT"  # not asked again
 
-    monkeypatch.setenv("EVENT_AI_PROVIDER", "clairic")
-    monkeypatch.setenv("EVENT_AI_MODEL", "clairic")
-    monkeypatch.setenv("EVENT_AI_URL", "https://cf.example/ai/run/@cf/cloudflare/clairic")
-    monkeypatch.setenv("EVENT_AI_KEY", "k")
-    monkeypatch.setenv("EVENT_AI_SECONDARY_PROVIDER", "chat")
-    monkeypatch.setenv("EVENT_AI_SECONDARY_MODEL", "meta/muse-ember")
-    monkeypatch.setenv("EVENT_AI_SECONDARY_URL", "https://vercel.example/v1/chat/completions")
-    monkeypatch.setenv("EVENT_AI_SECONDARY_KEY", "k")
-    monkeypatch.setenv("EVENT_AI_SECONDARY_EXPERIMENT", "muse-v1")
-    router = Router("clairic-v2")
-    router.configure({"primary_model": "clairic-flash", "secondary_model": "meta/muse-glimmer-30b", "share": 1})
-    assert router.primary.url.endswith("/@cf/cloudflare/clairic-flash")
-    assert router.primary_experiment == "clairic-v2+clairic-flash"
-    assert router.secondary_experiment == "muse-v1+meta-muse-glimmer-30b" and router.share == 1
-    monkeypatch.delenv("EVENT_AI_SECONDARY_SHARE", raising=False)
+
+def test_router_applies_saved_models(monkeypatch):
+    router = router_env(monkeypatch)
+    router.configure({"models": {"cloudflare": "clairic-flash", "vercel": "meta/muse-glimmer-30b"}})
+    assert router.ai["cloudflare"].url.endswith("/@cf/cloudflare/clairic-flash")
+    assert router.experiment["cloudflare"] == "clairic-v2+clairic-flash"
+    assert router.experiment["vercel"] == "muse-v1+meta-muse-glimmer-30b"
+    assert router.order == ["claude", "chatgpt", "vercel", "cloudflare"]  # the default priority
     router.configure({})
-    assert (router.primary_experiment, router.share) == ("clairic-v2", "auto")
+    assert router.experiment["cloudflare"] == "clairic-v2"
+
+
+def test_plans_use_call_caps_not_the_spend_budget(monkeypatch):
+    router, store = router_env(monkeypatch), EventStore(Storage(":memory:"))
+    monkeypatch.setenv("EVENT_AI_CHATGPT_MODEL", "gpt-6.2-sol")
+    monkeypatch.setenv("EVENT_AI_CHATGPT_URL", "http://127.0.0.1:8611/respond")
+    monkeypatch.setenv("EVENT_AI_CLAUDE_MODEL", "sonnet")
+    router.configure({"order": ["claude", "chatgpt", "cloudflare"]})
+    spent(store, "chat:meta/muse-ember", {}, cost=19.5)  # paid gateway budget long gone
+    assert router.ready("chatgpt", store) and not router.ready("vercel", store)
+    monkeypatch.setenv("EVENT_AI_CHATGPT_5H_CALLS", "1")
+    spent(store, "chatgpt:gpt-6.2-sol", {})
+    assert not router.ready("chatgpt", store)  # the bot's own 5-hour cap
+    monkeypatch.setenv("EVENT_AI_CHATGPT_5H_CALLS", "100")
+    assert router.ready("chatgpt", store)
+    router.cooldown["chatgpt"] = float("inf")  # after a 429 from the plan's sharing limit
+    assert not router.ready("chatgpt", store) and router.ready("claude", store)
+
+
+def test_claude_cli_call_and_limits(monkeypatch):
+    import subprocess
+
+    monkeypatch.setenv("EVENT_AI_CLAUDE_MODEL", "sonnet")
+    monkeypatch.setenv("EVENT_AI_CLAUDE_BIN", "/bin/claude")
+    ai, e = AI("EVENT_AI_CLAUDE", "claude"), event()
+    answer = {**json.loads(decision(e).model_dump_json()), "ticker": "WRONG"}
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps({"is_error": False, "structured_output": answer}), ""))
+    monkeypatch.setattr(subprocess, "run", run)
+    got, request, _ = ai.evaluate(e, {})
+    assert got.ticker == e.ticker and json.loads(request["input"])["event"]["ticker"] == e.ticker
+    command = run.call_args.args[0]
+    assert command[:4] == ["/bin/claude", "-p", "--model", "sonnet"] and "--json-schema" in command
+    assert command[command.index("--tools") + 1] == ""  # no tools: the article text cannot make it act
+    run.return_value = subprocess.CompletedProcess([], 1, json.dumps(
+        {"is_error": True, "api_error_status": 429, "result": "Claude AI usage limit reached"}), "")
+    with pytest.raises(Throttled):
+        ai.evaluate(e, {})
+
+
+def test_news_context_is_point_in_time():
+    from botfolio.events.context import news_context
+
+    e = event(mode="forward", published_at=AT, content_at=AT, received_at=AT)
+    earlier = [event(source_id=str(i), text=f"headline {i}", published_at=AT - timedelta(hours=h),
+                     content_at=AT - timedelta(hours=h), received_at=AT - timedelta(hours=h))
+               for i, h in ((1, 1), (2, 30))]
+    later = event(source_id="9", text="later", received_at=AT + timedelta(minutes=1), published_at=AT, content_at=AT)
+    other = event(source_id="8", ticker="MSFT", text="other", published_at=AT - timedelta(hours=1),
+                  content_at=AT - timedelta(hours=1), received_at=AT - timedelta(hours=1))
+    ctx = news_context(e, [e, *earlier, later, other], "Apple Inc.")
+    assert ctx["company"] == "Apple Inc." and ctx["session"].startswith("regular session, 15 min after the open")
+    assert [h["headline"] for h in ctx["recent_headlines"]] == ["headline 1"]  # not itself, older or later news

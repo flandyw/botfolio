@@ -1,11 +1,14 @@
 """Dashboard API for worker status, paper trading controls, order journal, and news audit."""
 
+import asyncio
 import hmac
 import json
+import math
 import os
 import re
+import time
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -14,9 +17,24 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from botfolio.config import AppConfig, watchlist
-from botfolio.events.ai import CLOUDFLARE_MODELS, FREE_NEURONS, budget, neurons_per_million
-from botfolio.events.paper import configured
+from botfolio.config import AppConfig, load_credentials, watchlist
+from botfolio.data.alpaca import AlpacaClient
+from botfolio.data.calendar import ny_date
+from botfolio.events.activity import strategy_performance, trade_activity
+from botfolio.events.ai import (
+    CLAUDE_MODELS,
+    CLOUDFLARE_MODELS,
+    FREE_NEURONS,
+    PLANS,
+    SLOTS,
+    Router,
+    budget,
+    neurons_per_million,
+    plan_usage,
+)
+from botfolio.events.models import Event
+from botfolio.events.paper import PaperExecutor, configured
+from botfolio.events.review import chart_time, review
 from botfolio.events.store import EventStore
 from botfolio.storage import Storage
 
@@ -25,34 +43,59 @@ MAX_WATCHLIST = 500
 NEURON_USD = 0.011 / 1000
 MAX_MONTHLY_USD = 50  # slider ceiling; a typo should not spend real money
 PROVIDER_FAILURE = "Provider failure or invalid structured output"
-_vercel_models: dict = {}
-_vercel_credits: dict = {}
+_models: dict = {}
+_credits: dict = {}
 
 
-def vercel_credits() -> float | None:
-    """Remaining gateway credit in USD from /v1/credits, cached for five minutes; None when unknown."""
-    key = os.getenv("EVENT_AI_SECONDARY_KEY", "")
-    if key and _vercel_credits.get("at", 0) < datetime.now(UTC).timestamp() - 300:
+def gateway() -> str:
+    """The vercel slot's service: OpenRouter or Vercel AI Gateway, told apart by its URL."""
+    return "OpenRouter" if "openrouter.ai" in os.getenv("EVENT_AI_VERCEL_URL", "") else "Vercel"
+
+
+LABELS = {"claude": "Claude plan (local claude -p)", "chatgpt": "ChatGPT plan (signed in)",
+          "cloudflare": "Cloudflare Workers AI"}
+
+
+def gateway_credits() -> float | None:
+    """Remaining gateway credit in USD, cached for five minutes; None when unknown or unlimited."""
+    key = os.getenv("EVENT_AI_VERCEL_KEY", "")
+    if key and _credits.get("at", 0) < datetime.now(UTC).timestamp() - 300:
         try:
-            balance = requests.get("https://ai-gateway.vercel.sh/v1/credits", timeout=10,
-                                   headers={"Authorization": "Bearer " + key}).json()["balance"]
-            _vercel_credits.update(at=datetime.now(UTC).timestamp(), balance=float(balance))
+            auth = {"Authorization": "Bearer " + key}
+            if gateway() == "OpenRouter":
+                left = requests.get("https://openrouter.ai/api/v1/key", timeout=10, headers=auth).json()["data"]["limit_remaining"]
+            else:
+                left = requests.get("https://ai-gateway.vercel.sh/v1/credits", timeout=10, headers=auth).json()["balance"]
+            _credits.update(at=datetime.now(UTC).timestamp(), balance=None if left is None else float(left))
         except (requests.RequestException, ValueError, KeyError, TypeError):
             pass
-    return _vercel_credits.get("balance")
+    return _credits.get("balance")
 
 
-def vercel_models() -> list[str]:
-    """Gateway language models that accept a JSON response format, cached for an hour."""
-    if _vercel_models.get("at", 0) < datetime.now(UTC).timestamp() - 3600:
+def provider_models(name: str) -> list[str]:
+    """Models a provider offers with JSON output, fetched ones cached for an hour. On OpenRouter, only free ones."""
+    if name == "claude":
+        return list(CLAUDE_MODELS)
+    if name == "cloudflare":
+        return list(CLOUDFLARE_MODELS) if os.getenv("EVENT_AI_PROVIDER") == "clairic" else []
+    cache = _models.setdefault(name, {})
+    if cache.get("at", 0) < datetime.now(UTC).timestamp() - 3600:
         try:
-            data = requests.get("https://ai-gateway.vercel.sh/v1/models", timeout=10).json()["data"]
-            _vercel_models.update(at=datetime.now(UTC).timestamp(), ids=sorted(
-                m["id"] for m in data if m.get("type") == "language"
-                and "response_format" in m.get("supported_parameters", [])))
+            if name == "chatgpt":
+                status = os.getenv("EVENT_AI_CHATGPT_URL", "").rsplit("/", 1)[0] + "/status"
+                ids = requests.get(status, timeout=10).json()["models"]
+            elif gateway() == "OpenRouter":
+                data = requests.get("https://openrouter.ai/api/v1/models", timeout=10).json()["data"]
+                ids = [m["id"] for m in data if m["id"].endswith(":free")
+                       and "response_format" in (m.get("supported_parameters") or [])]
+            else:
+                data = requests.get("https://ai-gateway.vercel.sh/v1/models", timeout=10).json()["data"]
+                ids = [m["id"] for m in data if m.get("type") == "language"
+                       and "response_format" in m.get("supported_parameters", [])]
+            cache.update(at=datetime.now(UTC).timestamp(), ids=sorted(ids))
         except (requests.RequestException, ValueError, KeyError, TypeError):
-            return _vercel_models.get("ids", [])
-    return _vercel_models["ids"]
+            return cache.get("ids", [])
+    return cache["ids"]
 
 
 SYMBOL = re.compile(r"[A-Z][A-Z0-9.\-]{0,14}")
@@ -65,12 +108,22 @@ def kill_file() -> Path:
 def create_app(cfg: AppConfig) -> Starlette:
     storage = Storage(cfg.db_path)
     store = EventStore(storage)
+    trade_cache = {}
+    trade_loads = {}
+    trade_slots = asyncio.Semaphore(4)
 
     @asynccontextmanager
     async def lifespan(_):
+        warmup = asyncio.create_task(preload_trades())
         try:
             yield
         finally:
+            warmup.cancel()
+            await asyncio.gather(warmup, return_exceptions=True)
+            loads = list(trade_loads.values())
+            for task in loads:
+                task.cancel()
+            await asyncio.gather(*loads, return_exceptions=True)
             storage.close()
 
     def denied(request, write=False):
@@ -98,6 +151,8 @@ def create_app(cfg: AppConfig) -> Starlette:
         symbols = watchlist(storage, cfg)
         return JSONResponse({"symbols": symbols, "etfs": [s for s in symbols if s in set(cfg.etfs)],
                              "feed": cfg.data.feed, "max_symbols": MAX_WATCHLIST,
+                             "benchmarks": storage.get("desk-benchmarks") or {
+                                 "purchase_date": None, "annual_rate_pct": 5.75},
                              "password_required": bool(os.getenv("BOTFOLIO_DASHBOARD_PASSWORD", ""))})
 
     async def live(_):
@@ -113,6 +168,7 @@ def create_app(cfg: AppConfig) -> Starlette:
             "heartbeat_age_s": (now - datetime.fromisoformat(heartbeat)).total_seconds() if heartbeat else None,
             "execution_age_s": (now - datetime.fromisoformat(state["at"])).total_seconds() if state.get("at") else None,
             "market_open": state.get("market_open"),
+            "risk_regime": storage.get(f"risk-regime:{ny_date(now)}"),
             "phase": state.get("phase"),
             "message": state.get("message"),
             "enabled": configured(),
@@ -125,6 +181,9 @@ def create_app(cfg: AppConfig) -> Starlette:
                 "news": {"enabled": cfg.strategies.news.enabled, **limits["news"]},
                 "momentum": {"enabled": cfg.strategies.momentum.enabled, **limits["momentum"],
                              "symbols": cfg.strategies.momentum.symbols},
+                **{name: {"enabled": getattr(cfg.strategies, name).enabled, **limits[name],
+                          "symbols": getattr(cfg.strategies, name).symbols}
+                   for name in ("orb", "vwap_reversion", "pullback")},
                 "etf_trend": {"enabled": cfg.strategies.etf_trend.enabled, **limits["etf_trend"],
                               "allocation_pct": cfg.strategies.etf_trend.allocation_pct,
                               "sma_days": cfg.strategies.etf_trend.sma_days},
@@ -137,7 +196,7 @@ def create_app(cfg: AppConfig) -> Starlette:
             "news_fresh": bool(latest_news and now - datetime.fromisoformat(latest_news) <= timedelta(minutes=5)),
             "provider_failures": bool(data.get("provider_failures")),
             "issuer_feed_failures": bool(data.get("issuer_feed_failures")),
-            "ai_ready": os.getenv("EVENT_AI_PROVIDER", "disabled") != "disabled" and bool(os.getenv("EVENT_AI_KEY")),
+            "ai_ready": bool((st := ai_settings())["models"].keys() & set(st["order"])),
             "intents": [{k: row[k] for k in keep if row.get(k) is not None}
                         for row in journal() if row.get("state") != "closed"],
         })
@@ -146,6 +205,102 @@ def create_app(cfg: AppConfig) -> Starlette:
         """Every order the worker has recorded, newest first."""
         return denied(request) or JSONResponse(
             sorted(journal(), key=lambda row: row.get("opened") or "", reverse=True)[:200])
+
+    async def load_trade(key, payload):
+        row = {"key": key, "strategy": "news", **json.loads(payload)}
+        with storage.tx() as conn:
+            article = (conn.execute("SELECT payload FROM events WHERE event_key=?", (key,)).fetchone()
+                       if row["strategy"] == "news" else None)
+
+        context = row.get("context", {}).copy()
+        if article:
+            event = Event.model_validate_json(article[0])
+            context.update(article=event.text[:400], source=event.source, url=event.source_url)
+            context.setdefault("at", event.content_at.isoformat())
+        if context.get("at"):
+            context["time"] = chart_time(datetime.fromisoformat(context["at"]))
+        credentials = load_credentials(required=False)
+        executor = PaperExecutor(AlpacaClient(credentials, timeout=8, max_retries=1), store) if credentials else None
+        async with trade_slots:
+            detail = await asyncio.to_thread(trade_activity, executor, row, cfg.data.feed, context)
+        detail["submitted_time"] = chart_time(datetime.fromisoformat(row["opened"])) if row.get("opened") else None
+        detail["order"] = row
+        if not (detail.get("error") or detail.get("fill_error")):
+            timestamps = [datetime.fromisoformat(fill["at"]) for fill in [detail["entry"], *detail["exits"]]
+                          if fill and fill["at"]]
+            if row.get("opened"):
+                timestamps.append(datetime.fromisoformat(row["opened"]))
+            settled = (row["state"] == "closed" and detail["bars"] and timestamps
+                       and datetime.now(UTC) - max(timestamps) > timedelta(days=5))
+            identity = (key, payload)
+            trade_cache.pop(identity, None)
+            trade_cache[identity] = (time.monotonic() + (86400 if settled else 60), detail)
+            if len(trade_cache) > 256:
+                trade_cache.pop(next(iter(trade_cache)))
+        return detail
+
+    async def cached_trade(key, payload, *, wait_for_refresh=False):
+        identity = (key, payload)
+        cached = trade_cache.get(identity)
+        if cached and time.monotonic() < cached[0]:
+            return cached[1]
+
+        if identity not in trade_loads:
+            async def refresh():
+                try:
+                    return await load_trade(key, payload)
+                finally:
+                    trade_loads.pop(identity, None)
+
+            trade_loads[identity] = asyncio.create_task(refresh())
+        if cached and not wait_for_refresh:
+            return cached[1]
+        return await asyncio.shield(trade_loads[identity])
+
+    async def preload_trades():
+        while True:
+            if load_credentials(required=False):
+                with storage.tx() as conn:
+                    recent = conn.execute(
+                        "SELECT event_key,payload FROM event_orders "
+                        "ORDER BY json_extract(payload, '$.opened') DESC LIMIT 12"
+                    ).fetchall()
+                for i in range(0, len(recent), 2):
+                    await asyncio.gather(
+                        *(cached_trade(key, payload, wait_for_refresh=True) for key, payload in recent[i:i + 2]),
+                        return_exceptions=True,
+                    )
+            await asyncio.sleep(15)
+
+    performance_cache = {}
+
+    async def strategies_performance(request):
+        """Gross realized and open P&L per strategy, from Alpaca Paper fills. Cached for a minute."""
+        if refused := denied(request):
+            return refused
+        if (cached := performance_cache.get("at")) and time.monotonic() - cached < 60:
+            return JSONResponse(performance_cache["body"])
+        credentials = load_credentials(required=False)
+        if not credentials:
+            return JSONResponse({"error": "Connect Alpaca Paper to load strategy P&L."}, 503)
+        executor = PaperExecutor(AlpacaClient(credentials, timeout=8, max_retries=1), store)
+        try:
+            async with trade_slots:
+                body = await asyncio.to_thread(strategy_performance, executor, journal())
+        except Exception:
+            return JSONResponse({"error": "Alpaca Paper fills could not be loaded. Try again shortly."}, 502)
+        performance_cache.update(at=time.monotonic(), body=body)
+        return JSONResponse(body)
+
+    async def order_detail(request):
+        if refused := denied(request):
+            return refused
+        key = request.query_params.get("key")
+        with storage.tx() as conn:
+            record = conn.execute("SELECT payload FROM event_orders WHERE event_key=?", (key,)).fetchone()
+        if not record:
+            return JSONResponse({"error": "Journal entry not found."}, 404)
+        return JSONResponse(await cached_trade(key, record[0]))
 
     def matching(params, audit):
         """Events passing the news page's filters (ticker, status, action, source, text, age), plus all tickers/sources."""
@@ -205,6 +360,26 @@ def create_app(cfg: AppConfig) -> Starlette:
                              "total": len(events), "archived": archived, "queued": queued,
                              "last_assessed": storage.get("news-assess-last"), "unassessed": unassessed, "items": items})
 
+    reviews: dict = {}
+
+    async def news_review(request):
+        """AI news calls for one session scored against the prices that followed. Finished sessions are cached;
+        the current one is refetched at most once a minute."""
+        if refused := denied(request):
+            return refused
+        day = request.query_params.get("day")
+        hit = reviews.get(day)
+        if hit and (hit[1] is None or time.monotonic() - hit[1] < 60):
+            return JSONResponse(hit[0])
+        try:
+            client = AlpacaClient(load_credentials(), timeout=30, max_retries=2)
+            data = await asyncio.to_thread(review, store, client, cfg.data.feed, day)
+        except Exception as exc:  # missing keys or a market-data outage: the page says so instead of failing blank
+            return JSONResponse({"error": f"Could not load prices: {exc}"}, 502)
+        finished = data["day"] is not None and data["day"] < str(ny_date(datetime.now(UTC)))
+        reviews[day] = reviews[data["day"]] = (data, None if finished else time.monotonic())
+        return JSONResponse(data)
+
     async def assess(request):
         """Queue AI assessments for the worker: {"key": ...} for one article, or {"all": true, "filters": {...}} for
         every unassessed article the news page is showing (at most 200 at a time). The worker does them a few per
@@ -238,6 +413,24 @@ def create_app(cfg: AppConfig) -> Starlette:
         storage.put("watchlist", symbols)
         return JSONResponse({"symbols": symbols})
 
+    async def save_benchmarks(request):
+        if refused := denied(request, write=True):
+            return refused
+        try:
+            body = await request.json()
+            purchase_date, rate = body["purchase_date"], body["annual_rate_pct"]
+            if purchase_date is not None:
+                parsed = date.fromisoformat(purchase_date)
+                if parsed.isoformat() != purchase_date or parsed > ny_date(datetime.now(UTC)):
+                    raise ValueError
+            if type(rate) not in (int, float) or not math.isfinite(rate) or rate < 0:
+                raise ValueError
+        except (ValueError, KeyError, TypeError, OverflowError):
+            return JSONResponse({"error": "Enter a valid start date through today and a nonnegative annual rate."}, 400)
+        settings = {"purchase_date": purchase_date, "annual_rate_pct": rate}
+        storage.put("desk-benchmarks", settings)
+        return JSONResponse(settings)
+
     async def control(request):
         """arm, pause, stop (emergency stop) or clear-stop. Entries are never armed as a side effect."""
         if refused := denied(request, write=True):
@@ -269,42 +462,34 @@ def create_app(cfg: AppConfig) -> Starlette:
 
     def ai_settings():
         saved = storage.get("ai-settings") or {}
-        secondary = os.getenv("EVENT_AI_SECONDARY_PROVIDER", "disabled") == "chat"
-        return {
-            "primary_provider": os.getenv("EVENT_AI_PROVIDER", "disabled"),
-            "primary_model": saved.get("primary_model") or os.getenv("EVENT_AI_MODEL", "disabled"),
-            "secondary_ready": secondary and bool(os.getenv("EVENT_AI_SECONDARY_KEY")),
-            "secondary_model": saved.get("secondary_model") or os.getenv("EVENT_AI_SECONDARY_MODEL", ""),
-            "monthly_usd": float(saved.get("monthly_usd", os.getenv("EVENT_AI_MONTHLY_USD", "1"))),
-            "share": share if (share := saved.get("share", os.getenv("EVENT_AI_SECONDARY_SHARE") or "auto")) == "auto"
-            else float(share),
-        }
+        router = Router(os.getenv("EVENT_AI_EXPERIMENT", "cloudflare"))  # the worker's own reading of env + settings
+        router.configure(saved)
+        return {"order": router.order, "monthly_usd": router.monthly_usd,
+                "models": {name: ai.model for name, ai in router.ai.items() if ai.provider != "disabled"}}
 
     async def ai(request):
-        """GET: AI settings, model choices and daily usage (UTC days, last 14). PUT: save model/split choices."""
+        """GET: AI provider order, model choices and daily usage (UTC days, last 14). PUT: save order/models/budget."""
         if refused := denied(request, write=request.method == "PUT"):
             return refused
         if request.method == "PUT":
             try:
                 body = await request.json()
                 current = ai_settings()
-                primary = str(body.get("primary_model", current["primary_model"]))
-                secondary = str(body.get("secondary_model", current["secondary_model"]))
+                order = [str(name) for name in body.get("order", current["order"])]
+                models = {**current["models"], **{str(k): str(v) for k, v in (body.get("models") or {}).items()}}
                 monthly = float(body.get("monthly_usd", current["monthly_usd"]))
-                share = body.get("share", current["share"])
-                share = share if share == "auto" else float(share)
             except (ValueError, AttributeError, TypeError):
                 return JSONResponse({"error": "Bad request."}, 400)
-            if current["primary_provider"] == "clairic" and primary not in CLOUDFLARE_MODELS:
-                return JSONResponse({"error": "Unknown Cloudflare model."}, 400)
-            if secondary != current["secondary_model"] and secondary not in vercel_models():
-                return JSONResponse({"error": "Selected model is not available on Vercel AI Gateway with JSON output."}, 400)
+            if len(set(order)) != len(order) or not set(order) <= set(SLOTS):
+                return JSONResponse({"error": "Provider order must list known providers once each."}, 400)
+            for name, model in models.items():
+                if name not in current["models"]:
+                    return JSONResponse({"error": f"{name} is not configured in .env."}, 400)
+                if model != current["models"][name] and model not in provider_models(name):
+                    return JSONResponse({"error": f"{model} is not available on {name} with JSON output."}, 400)
             if not 0 <= monthly <= MAX_MONTHLY_USD:
-                return JSONResponse({"error": f"Vercel monthly budget must be between $0 and ${MAX_MONTHLY_USD}."}, 400)
-            if share != "auto" and not 0 <= share <= 1:
-                return JSONResponse({"error": "Traffic split must be between 0% and 100%."}, 400)
-            storage.put("ai-settings", {"primary_model": primary, "secondary_model": secondary, "share": share,
-                                        "monthly_usd": monthly})
+                return JSONResponse({"error": f"{gateway()} monthly budget must be between $0 and ${MAX_MONTHLY_USD}."}, 400)
+            storage.put("ai-settings", {"order": order, "models": models, "monthly_usd": monthly})
         since = (datetime.now(UTC) - timedelta(days=13)).date().isoformat()
         with storage.tx() as conn:
             rows = conn.execute("SELECT model, payload, response, latency, completed_at FROM event_decisions "
@@ -334,21 +519,26 @@ def create_app(cfg: AppConfig) -> Starlette:
                 m["latency"] /= m["calls"]
         settings = ai_settings()
         monthly = settings["monthly_usd"]
-        throttled = storage.get("ai-throttled")
-        return JSONResponse({"settings": settings, "free_neurons": FREE_NEURONS, "max_monthly_usd": MAX_MONTHLY_USD,
+        now = datetime.now(UTC).isoformat()
+        throttled = {k: v for k, v in (storage.get("ai-throttled") or {}).items() if k in SLOTS and v["until"] > now}
+        providers = [{"name": name, "label": LABELS.get(name, gateway() if name == "vercel" else name),
+                      "ready": name in settings["models"], "model": settings["models"].get(name),
+                      "options": provider_models(name) if name in settings["models"] else []} for name in SLOTS]
+        return JSONResponse({"settings": settings, "providers": providers, "free_neurons": FREE_NEURONS,
+                             "max_monthly_usd": MAX_MONTHLY_USD,
                              "budget": {"monthly_usd": monthly, **budget(storage, monthly),
-                                        "rpm": int(os.getenv("EVENT_AI_SECONDARY_RPM", "10")),
-                                        "balance": vercel_credits() if settings["secondary_ready"] else None,
-                                        "throttled": throttled if throttled and throttled["until"] >
-                                        datetime.now(UTC).isoformat() else None},
-                             "options": {"primary": list(CLOUDFLARE_MODELS) if settings["primary_provider"] == "clairic"
-                                         else [settings["primary_model"]],
-                                         "secondary": vercel_models() if settings["secondary_ready"] else []},
+                                        "rpm": int(os.getenv("EVENT_AI_VERCEL_RPM", "10")),
+                                        "plans": {p: plan_usage(storage, p) for p in PLANS if p in settings["models"]},
+                                        "balance": gateway_credits() if "vercel" in settings["models"] else None,
+                                        "throttled": throttled},
                              "days": sorted(days.values(), key=lambda r: r["day"])})
 
     routes = [Route("/api/config", config), Route("/api/live", live), Route("/api/orders", orders),
-              Route("/api/news", news), Route("/api/news/assess", assess, methods=["POST"]),
+              Route("/api/orders/detail", order_detail),
+              Route("/api/strategies/performance", strategies_performance),
+              Route("/api/news", news), Route("/api/news/review", news_review), Route("/api/news/assess", assess, methods=["POST"]),
               Route("/api/watchlist", save_watchlist, methods=["PUT"]),
+              Route("/api/desk-benchmarks", save_benchmarks, methods=["PUT"]),
               Route("/api/control/{action}", control, methods=["POST"]),
               Route("/api/ai", ai, methods=["GET", "PUT"])]
     if WEB_DIST.is_dir():

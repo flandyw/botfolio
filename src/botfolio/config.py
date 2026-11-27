@@ -37,6 +37,44 @@ class MomentumConfig(BaseModel):
         return list(dict.fromkeys(s.strip().upper() for s in v if s.strip()))
 
 
+class VwapConfig(BaseModel):
+    enabled: bool = False
+    max_positions: int = Field(3, ge=1)
+    position_pct: float = Field(25.0, gt=0, le=100)
+    risk_pct: float = Field(1.0, gt=0, le=5)
+    band_sd: float = Field(2.0, gt=0)          # enter beyond VWAP +/- this many standard deviations
+    hold_minutes: int = Field(60, ge=5)        # timed exit if price has not reverted to VWAP
+    symbols: list[str] = Field(default_factory=list)  # empty: watchlist stocks not traded by ETF strategies/momentum
+
+    _upper = field_validator("symbols")(MomentumConfig._upper.__func__)
+
+
+class OrbConfig(BaseModel):
+    enabled: bool = False
+    max_positions: int = Field(5, ge=1)
+    position_pct: float = Field(25.0, gt=0, le=100)
+    risk_pct: float = Field(1.0, gt=0, le=5)
+    lookback: int = Field(14, ge=2)            # sessions averaged for relative opening volume
+    min_rvol: float = Field(1.5, gt=0)
+    top: int = Field(20, ge=1)                 # only the highest relative-volume symbols are in play
+    entry_minutes: int = Field(120, ge=20)     # no new entries this long after the open
+    symbols: list[str] = Field(default_factory=list)
+
+    _upper = field_validator("symbols")(MomentumConfig._upper.__func__)
+
+
+class PullbackConfig(BaseModel):
+    enabled: bool = False
+    max_positions: int = Field(5, ge=1)
+    position_pct: float = Field(10.0, gt=0, le=100)
+    sma_days: int = Field(200, ge=2)
+    entry_rsi: float = Field(10.0, gt=0, lt=100)
+    exit_sma: int = Field(5, ge=2)
+    symbols: list[str] = Field(default_factory=list)
+
+    _upper = field_validator("symbols")(MomentumConfig._upper.__func__)
+
+
 class TrendConfig(BaseModel):
     enabled: bool = True
     allocation_pct: float = Field(50.0, gt=0, le=100)
@@ -62,6 +100,9 @@ class CashParkConfig(BaseModel):
 class StrategiesConfig(BaseModel):
     news: NewsConfig = Field(default_factory=NewsConfig)
     momentum: MomentumConfig = Field(default_factory=MomentumConfig)
+    vwap_reversion: VwapConfig = Field(default_factory=VwapConfig)
+    orb: OrbConfig = Field(default_factory=OrbConfig)
+    pullback: PullbackConfig = Field(default_factory=PullbackConfig)
     etf_trend: TrendConfig = Field(default_factory=TrendConfig)
     etf_rotation: RotationConfig = Field(default_factory=RotationConfig)
     cash_park: CashParkConfig = Field(default_factory=CashParkConfig)
@@ -89,6 +130,9 @@ class AppConfig(BaseModel):
                          risk_pct=s.news.risk_pct),
             "momentum": dict(max_positions=s.momentum.max_positions, position_pct=s.momentum.position_pct,
                              risk_pct=s.momentum.risk_pct),
+            **{name: dict(max_positions=c.max_positions, position_pct=c.position_pct, risk_pct=c.risk_pct)
+               for name, c in (("vwap_reversion", s.vwap_reversion), ("orb", s.orb))},
+            "pullback": dict(max_positions=s.pullback.max_positions, position_pct=s.pullback.position_pct),
             "etf_trend": dict(max_positions=max(1, len(self.etfs)),
                               position_pct=s.etf_trend.allocation_pct / max(1, len(self.etfs))),
             "etf_rotation": dict(max_positions=s.etf_rotation.top,

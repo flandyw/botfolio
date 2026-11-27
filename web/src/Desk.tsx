@@ -3,15 +3,18 @@ import type {
   AlpacaAccountResponse,
   AlpacaPortfolioHistory,
   AlpacaStatus,
+  BenchmarkSettings,
   Live,
   StrategyConfig,
   StrategyName,
+  StrategyPerformance,
 } from "./api";
 import { EquityChart } from "./EquityChart";
 import { ago, etDateTime, num, pct, signedUsd, tone, usd } from "./format";
 import { cell, cx } from "./classes";
 import { Choice, Figure, Message, Section, SymbolLink } from "./ui";
 import { useApi } from "./useApi";
+import { STRATEGIES, STRATEGY_TITLES } from "./strategyInfo";
 
 const PERIODS = [
   ["1D", "5Min"],
@@ -22,37 +25,12 @@ const PERIODS = [
 ] as const;
 type Period = (typeof PERIODS)[number][0];
 
-const STRATEGIES: { name: StrategyName; title: string; trades: (c?: StrategyConfig) => string }[] = [
-  { name: "news", title: "News + AI", trades: () => "Fresh watchlist news with an AI buy or sell signal" },
-  {
-    name: "momentum",
-    title: "Intraday momentum",
-    trades: (c) =>
-      `30-minute breakouts outside the normal range in ${c?.symbols?.length ? c.symbols.join(" and ") : "the watchlist"}, long or short, flat by close`,
-  },
-  {
-    name: "etf_trend",
-    title: "ETF trend",
-    trades: (c) => `Watchlist ETFs above their ${c?.sma_days ?? 200}-day average, held overnight`,
-  },
-  {
-    name: "etf_rotation",
-    title: "ETF rotation",
-    trades: (c) => `Top ${c?.max_positions ?? 5} watchlist ETFs by 1- to 12-month momentum`,
-  },
-  {
-    name: "cash_park",
-    title: "Parked cash",
-    trades: (c) => `Idle cash not used by ETF strategies, held in ${c?.symbol ?? "a Treasury-bill ETF"}`,
-  },
-];
-const TITLES = Object.fromEntries(STRATEGIES.map((s) => [s.name, s.title])) as Record<StrategyName, string>;
-
 function limits(name: StrategyName, c: StrategyConfig | undefined, etfs: number) {
   if (!c) return "—";
   if (name === "etf_trend") return `${num(c.allocation_pct, 0)}% of equity across ${etfs} ETFs`;
   if (name === "etf_rotation") return `${num(c.allocation_pct, 0)}% of equity across ${c.max_positions} ETFs`;
   if (name === "cash_park") return `Up to ${num(c.position_pct, 0)}% of equity`;
+  if (name === "pullback") return `Up to ${c.max_positions} positions · ${num(c.position_pct, 0)}% of equity each`;
   return `Up to ${c.max_positions} positions · ${num(c.position_pct, 0)}% of equity each · ${num(c.risk_pct, 1)}% risk`;
 }
 
@@ -63,20 +41,30 @@ export function Desk({
   liveError,
   status,
   etfs,
+  benchmarks,
   onOpen,
 }: {
   live: Live | null;
   liveError: string | null;
   status: AlpacaStatus | null;
   etfs: number;
+  benchmarks?: BenchmarkSettings;
   onOpen: (symbol: string) => void;
 }) {
   const connected = Boolean(status?.connected);
   const [period, setPeriod] = useState<Period>("1M");
   const timeframe = PERIODS.find(([p]) => p === period)![1];
+  const purchaseDate = benchmarks?.purchase_date;
+  const performance = useApi<StrategyPerformance>("strategies/performance", 60_000);
+  // Best performer first; strategies with no filled trades keep their usual order at the bottom.
+  const ranked = [...STRATEGIES].sort(
+    (a, b) => (performance.data?.[b.name]?.pnl ?? -Infinity) - (performance.data?.[a.name]?.pnl ?? -Infinity),
+  );
   const account = useApi<AlpacaAccountResponse>(connected ? "alpaca/account" : null, 30_000);
   const history = useApi<AlpacaPortfolioHistory>(
-    connected ? `alpaca/portfolio-history?period=${period}&timeframe=${timeframe}` : null,
+    connected
+      ? `alpaca/portfolio-history?period=${period}&timeframe=${timeframe}${purchaseDate ? `&purchase_date=${encodeURIComponent(purchaseDate)}` : ""}`
+      : null,
     60_000,
   );
   const acct = account.data?.account;
@@ -140,8 +128,15 @@ export function Desk({
               {history.error ? (
                 <Message error>{history.error}</Message>
               ) : (
-                <EquityChart points={history.data?.points ?? []} baseValue={history.data?.baseValue ?? null} />
+                <EquityChart history={history.data} settings={benchmarks} />
               )}
+              {history.data?.benchmarkError && <Message error>{history.data.benchmarkError}</Message>}
+              <p className="mt-2 text-[13px] text-dim">
+                <a href="#/control" className="underline underline-offset-4">
+                  {purchaseDate ? "Benchmark settings" : "Set a benchmark start date"}
+                </a>
+                {purchaseDate && ` · Started ${purchaseDate} · $10,000 per benchmark`}
+              </p>
             </div>
           </>
         )}
@@ -177,11 +172,14 @@ export function Desk({
               </Figure>
             </dl>
 
+            {performance.error && <Message error>Strategy P&amp;L: {performance.error}</Message>}
             <div className="mt-5 overflow-x-auto">
-              <table className="w-full min-w-[760px] border-collapse text-[13px]">
+              <table className="w-full min-w-[900px] border-collapse text-[13px]">
                 <thead>
                   <tr>
+                    <th className={cx(cell.th, "w-[28px]")}>#</th>
                     <th className={cx(cell.th, "w-[150px]")}>Strategy</th>
+                    <th className={cx(cell.th, cell.right, "w-[150px]")}>P&amp;L</th>
                     <th className={cell.th}>Trades</th>
                     <th className={cell.th}>Limits</th>
                     <th className={cx(cell.th, "w-[90px]")}>Last run</th>
@@ -189,7 +187,8 @@ export function Desk({
                   </tr>
                 </thead>
                 <tbody>
-                  {STRATEGIES.map(({ name, title, trades }) => {
+                  {ranked.map(({ name, title, trades }, rank) => {
+                    const result = performance.data?.[name];
                     const config = live.strategy_config?.[name];
                     const state = live.strategies?.[name];
                     const off = config ? !config.enabled : false;
@@ -202,9 +201,28 @@ export function Desk({
                         : state?.note;
                     return (
                       <tr key={name} className={off ? "text-faint" : ""}>
+                        <td className={cx(cell.td, "num text-dim")}>{result ? rank + 1 : "—"}</td>
                         <td className={cx(cell.td, "font-medium")}>
                           {title}
                           {off && <span className="font-normal"> (off)</span>}
+                        </td>
+                        <td className={cx(cell.td, cell.right, "whitespace-nowrap")}>
+                          {result ? (
+                            <>
+                              <span className={cx("num", tone(result.pnl))}>
+                                {signedUsd(result.pnl)} {pct(result.pnl_pct)}
+                              </span>
+                              <div
+                                className="num text-[12px] text-dim"
+                                title="Realized from closed shares, open marked at the current price. Return is on capital deployed."
+                              >
+                                {result.unrealized ? `${signedUsd(result.unrealized)} open · ` : ""}
+                                {result.closed ? `${result.wins}/${result.closed} won` : `${result.trades} open`}
+                              </div>
+                            </>
+                          ) : (
+                            <span className="text-dim">{performance.loading ? "…" : "No fills"}</span>
+                          )}
                         </td>
                         <td className={cell.td}>{trades(config)}</td>
                         <td className={cell.td}>{limits(name, config, etfs)}</td>
@@ -258,7 +276,7 @@ export function Desk({
                             <SymbolLink symbol={p.symbol} onOpen={onOpen} />
                           </td>
                           <td className={cell.td}>
-                            {intent ? TITLES[intent.strategy] : <span className="text-faint">External</span>}
+                            {intent ? STRATEGY_TITLES[intent.strategy] : <span className="text-faint">External</span>}
                             {intent?.exit_requested && <span className="text-dim"> · closing</span>}
                           </td>
                           <td className={cell.td}>{p.side}</td>
@@ -277,7 +295,11 @@ export function Desk({
             )}
           </Section>
 
-          <Section title="Recent orders" note={orders.length ? `Latest ${Math.min(orders.length, 20)}` : "0"}>
+          <Section
+            title="Recent orders"
+            note={orders.length ? `Latest ${Math.min(orders.length, 20)}` : "0"}
+            aside={<a className="text-[13px] underline underline-offset-4" href="#/activity">Activity log</a>}
+          >
             {orders.length === 0 ? (
               <Message>No orders yet.</Message>
             ) : (

@@ -28,6 +28,9 @@ export type AlpacaBridgeConfig = {
 
 const DEFAULT_SYMBOLS = ["QQQ", "SPY", "VGT", "XLK", "SOXX", "VUG"];
 const LIVE_URL_RE = /api\.alpaca\.markets/i;
+const DAY = 86_400;
+const MARKET_OPEN = 9 * 3600 + 30 * 60;
+const BENCHMARK_SYMBOLS = ["QQQ", "VGT"] as const;
 
 const NY_PARTS = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York",
@@ -52,6 +55,53 @@ export function nyChartTime(ts: Date | string | number): number {
   return Math.floor(
     Date.UTC(parts.year, parts.month - 1, parts.day, hour, parts.minute, parts.second) / 1000,
   );
+}
+
+async function etfBenchmarks(
+  client: Alpaca,
+  feed: "iex" | "sip",
+  purchase: Date,
+  timeframe: string,
+  times: number[],
+) {
+  const daily = timeframe === "1D";
+  const minutes = timeframe === "15Min" ? 15 : 5;
+  const purchaseEnd = new Date(purchase.getTime() + 8 * DAY * 1000);
+  const firstDay = Math.floor(times[0] / DAY) * DAY;
+  const start = new Date(Math.max(purchase.getTime(), (firstDay - 7 * DAY) * 1000));
+  const options = { symbols: [...BENCHMARK_SYMBOLS], feed, adjustment: "all" };
+  const [entry, market] = await Promise.all([
+    client.marketData.getStockBars({
+      ...options,
+      timeframe: TimeFrame.Day,
+      start: purchase,
+      end: purchaseEnd.getTime() < Date.now() - 15 * 60_000 ? purchaseEnd : undefined,
+    }),
+    client.marketData.getStockBars({
+      ...options,
+      timeframe: daily ? TimeFrame.Day : timeFrame(minutes, TimeFrameUnit.Minute),
+      start,
+    }),
+  ]);
+  return Object.fromEntries(BENCHMARK_SYMBOLS.map((symbol) => {
+    const buy = entry[symbol]?.[0];
+    if (!buy || !(buy.open > 0)) return [symbol, []];
+    const sessionDay = Math.floor(nyChartTime(buy.timestamp) / DAY) * DAY;
+    const firstTrade = sessionDay + (daily ? 0 : MARKET_OPEN);
+    const prices = (market[symbol] ?? [])
+      .map((bar) => ({ time: nyChartTime(bar.timestamp), close: bar.close }))
+      .filter((bar) => bar.time >= firstTrade && bar.close > 0)
+      .sort((a, b) => a.time - b.time);
+    let i = 0;
+    let close: number | undefined;
+    return [symbol, times.flatMap((time) => {
+      // Daily points compare the same session. Intraday valuation uses completed bars.
+      const cutoff = daily ? Math.floor(time / DAY) * DAY : time - minutes * 60;
+      while (i < prices.length && prices[i].time <= cutoff) close = prices[i++].close;
+      if (close != null) return [{ time, value: 10_000 * (close / buy.open) }];
+      return !daily && time >= firstTrade && time < sessionDay + DAY ? [{ time, value: 10_000 }] : [];
+    })];
+  }));
 }
 
 /** Load key=value pairs from a .env file without mutating existing process.env entries. */
@@ -480,6 +530,17 @@ export function createAlpacaBridge(cfg: AlpacaBridgeConfig = {}): AlpacaBridge {
         const client = await requirePaperClient();
         const period = url.searchParams.get("period") ?? "1M";
         const timeframe = url.searchParams.get("timeframe") ?? (period === "1D" ? "5Min" : "1D");
+        const purchaseDate = url.searchParams.get("purchase_date");
+        const purchase = purchaseDate === null ? null : new Date(`${purchaseDate}T00:00:00Z`);
+        if (purchase && (
+          !Number.isFinite(purchase.getTime()) ||
+          purchase.toISOString().slice(0, 10) !== purchaseDate ||
+          purchase.getTime() / 1000 > nyChartTime(Date.now()) ||
+          !["5Min", "15Min", "1D"].includes(timeframe)
+        )) {
+          sendJson(res, 400, { error: "Invalid benchmark purchase date or timeframe" });
+          return true;
+        }
         const continuousPnl = url.searchParams.get("pnl_reset") === "no_reset";
         const hist = await client.trading.portfolioHistory.getAccountPortfolioHistory({
           period,
@@ -503,11 +564,18 @@ export function createAlpacaBridge(cfg: AlpacaBridgeConfig = {}): AlpacaBridge {
           .filter((p) => p.time > 0)
           .sort((a, b) => a.time - b.time)
           .filter((p, i, list) => p.time !== list[i + 1]?.time);
+        const times = points.filter((p) => p.equity != null).map((p) => p.time);
+        const comparison = purchase && times.length && times[times.length - 1] >= purchase.getTime() / 1000
+          ? await etfBenchmarks(client, feed, purchase, timeframe, times)
+              .then((benchmarks) => ({ benchmarks }))
+              .catch(() => ({ benchmarkError: "ETF market data is temporarily unavailable." }))
+          : {};
         sendJson(res, 200, {
           period,
           timeframe,
           baseValue: num(hist.baseValue),
           points,
+          ...comparison,
         });
         return true;
       }

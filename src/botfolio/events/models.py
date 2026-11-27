@@ -73,7 +73,8 @@ class Decision(BaseModel):
 
     def side(self) -> int:
         # Aggressive paper mode: follow the direction call; the model almost always says WAIT/high uncertainty.
-        if self.materiality not in {"high", "medium"} or not self.key_evidence:
+        # HOLD is the priced-in call: a direction the market has already traded is not an entry.
+        if self.materiality not in {"high", "medium"} or not self.key_evidence or self.recommended_action == "HOLD":
             return 0
         if self.directional_hypothesis == "bullish" and self.recommended_action != "SELL":
             return 1

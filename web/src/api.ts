@@ -42,15 +42,13 @@ export type AiUsageDay = {
   models: Record<string, AiModelUsage>;
 };
 
+export type AiPlanUsage = { five_hour: number; week: number; max_five_hour: number; max_week: number };
+
+export type AiProvider = { name: string; label: string; ready: boolean; model: string | null; options: string[] };
+
 export type AiUsage = {
-  settings: {
-    primary_provider: string;
-    primary_model: string;
-    secondary_ready: boolean;
-    secondary_model: string;
-    share: number | "auto";
-    monthly_usd: number;
-  };
+  settings: { order: string[]; models: Record<string, string>; monthly_usd: number };
+  providers: AiProvider[];
   free_neurons: number;
   max_monthly_usd: number;
   budget: {
@@ -62,13 +60,21 @@ export type AiUsage = {
     neurons: number;
     rpm: number;
     balance: number | null;
-    throttled: { at: string; status: number; until: string } | null;
+    throttled: Record<string, { at: string; status: number; until: string }>;
+    plans: Record<string, AiPlanUsage>;
   };
-  options: { primary: string[]; secondary: string[] };
   days: AiUsageDay[];
 };
 
-export type StrategyName = "news" | "momentum" | "etf_trend" | "etf_rotation" | "cash_park";
+export type StrategyName =
+  | "news"
+  | "momentum"
+  | "orb"
+  | "vwap_reversion"
+  | "pullback"
+  | "etf_trend"
+  | "etf_rotation"
+  | "cash_park";
 
 export type StrategyStatus = {
   at?: string;
@@ -103,8 +109,11 @@ export type Config = {
   etfs: string[];
   feed: string;
   max_symbols: number;
+  benchmarks: BenchmarkSettings;
   password_required: boolean;
 };
+
+export type BenchmarkSettings = { purchase_date: string | null; annual_rate_pct: number };
 
 /** One row of the worker's order journal. */
 export type JournalRow = {
@@ -115,11 +124,62 @@ export type JournalRow = {
   qty?: number;
   limit?: number;
   stop?: number | null;
+  target?: number | null;
+  deadline?: string | null;
+  filled_qty?: number | string;
   state: string;
   broker_status?: string;
   opened?: string;
   exit_requested?: string;
   error?: string;
+};
+
+/** Gross P&L per strategy from Alpaca Paper fills; open shares are marked at the current price. */
+export type StrategyPerformance = Partial<
+  Record<
+    StrategyName,
+    {
+      trades: number;
+      closed: number;
+      wins: number;
+      realized: number;
+      unrealized: number;
+      deployed: number;
+      pnl: number;
+      pnl_pct: number | null;
+    }
+  >
+>;
+
+export type TradeFill = {
+  kind: string;
+  price: number;
+  qty: number;
+  at: string | null;
+  time: number | null;
+};
+
+export type TradeActivity = {
+  order: JournalRow;
+  entry: TradeFill | null;
+  exits: TradeFill[];
+  bars: Bar[];
+  bar_seconds: number;
+  submitted_time: number | null;
+  status?: string;
+  error?: string;
+  fill_error?: string;
+  context: {
+    at?: string;
+    time?: number;
+    price?: number;
+    levels?: Record<string, number>;
+    metrics?: Record<string, string | number>;
+    note?: string;
+    article?: string;
+    source?: string;
+    url?: string;
+  };
 };
 
 export type NewsItem = {
@@ -151,6 +211,46 @@ export type News = {
   unassessed: number;
   last_assessed: string | null;
   items: NewsItem[];
+};
+
+/** One AI news call scored against the prices after it. Moves are signed by the call: positive means it was right. */
+export type ReviewCall = {
+  key: string;
+  ticker: string;
+  day: string;
+  published: string;
+  received: string;
+  published_time: number;
+  source: string;
+  url: string;
+  text: string;
+  side: 1 | -1;
+  held: boolean;
+  action: string;
+  materiality: string;
+  model: string;
+  reasoning: string;
+  evidence: string[];
+  traded: boolean;
+  entry_time: number;
+  entry: number;
+  after60_time: number;
+  after60: number;
+  m15: number;
+  m60: number;
+  m_close: number;
+  full_hour: boolean;
+  bracket: "stop" | "target" | "time";
+  verdict: "right" | "wrong" | "flat";
+};
+
+export type NewsReview = {
+  days: string[];
+  day: string | null;
+  open?: number;
+  close?: number;
+  calls: ReviewCall[];
+  prices: Record<string, { time: number[]; close: number[]; prev_close: number | null }>;
 };
 
 /* --- Alpaca JS SDK Bridge (/api/alpaca/*) types --- */
@@ -256,6 +356,8 @@ export type AlpacaPortfolioHistory = {
   timeframe: string;
   baseValue: number | null;
   points: AlpacaHistoryPoint[];
+  benchmarks?: Partial<Record<"QQQ" | "VGT", Point[]>>;
+  benchmarkError?: string;
 };
 
 export type AlpacaStreamBar = Bar & {

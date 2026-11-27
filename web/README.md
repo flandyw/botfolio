@@ -1,12 +1,13 @@
 # Web dashboard
 
-The Botfolio dashboard has five pages:
+The Botfolio dashboard has six pages:
 
 - **Desk**: paper account summary, equity chart, all five strategies with their latest runs, open positions, and recent orders.
+- **Activity**: filter the paper order journal and inspect entry and exit fills, planned stops and targets, and recorded strategy signals on a trade chart.
 - **Performance**: portfolio P&L, returns, and drawdown across selectable timeframes, plus unrealized P&L and exposure by open position.
 - **Markets**: sortable watchlist table alongside a live price chart. Filter by symbol, click a row, or step through rows with the arrow keys.
 - **News**: saved articles paired with their AI assessments and on-demand evaluation controls.
-- **Control**: entry toggle, emergency stop, watchlist editor, AI usage and model routing, and the order journal.
+- **Control**: entry toggle, emergency stop, watchlist editor, and AI usage and model routing.
 
 ## Development
 

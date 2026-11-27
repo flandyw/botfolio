@@ -86,8 +86,8 @@ class AlpacaNews:
             received = datetime.now(UTC)
             for article in data.get("news", []):
                 text = plain(" ".join(article.get(field) or "" for field in ("headline", "content", "summary")))
-                if not text.strip():
-                    continue
+                if not text.strip() or not (article.get("url") or "").startswith("https://"):
+                    continue  # one http:// link failed the whole poll and blocked news entries
                 for ticker in sorted(set(article["symbols"]) & set(self.symbols)):
                     result.append(Event(source="alpaca:" + article.get("source", "unknown"),
                         source_id=str(article["id"]), ticker=ticker, event_type="news",
