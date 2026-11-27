@@ -2,6 +2,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
+import requests
+
 from botfolio.events.activity import news_performance
 from botfolio.events.ai import CHAT_INSTRUCTIONS, CHAT_REVISION, Router
 from botfolio.events.context import trade_terms
@@ -41,25 +43,30 @@ def test_sec_current_maps_ciks_to_watchlist_and_fetches_each_filing_once():
             + entry("8-K", 999, "0000000999-25-000001") + entry("8-K/A", 789019, "0000789019-25-000001")
             + entry("8-K", 1045810, "0001045810-25-000001") + "</feed>")
     tickers = {"0": dict(cik_str=320193, ticker="AAPL"), "1": dict(cik_str=789019, ticker="MSFT"),
-               "2": dict(cik_str=1045810, ticker="NVDA")}
-    calls = []
+               "2": dict(cik_str=1045810, ticker="NVDA"), "3": dict(cik_str=1045810, ticker="NV-B")}
+    calls, down = [], [True]
 
     def get(url):
         calls.append(url)
+        if "1045810" in url and down:
+            raise requests.ConnectionError("reset")
         if url == SECCurrent.TICKERS:
             return Mock(json=lambda: tickers)
         if url == SECCurrent.FEED:
             return Mock(content=feed.encode())
         return Mock(text="x" * 300_000 if "1045810" in url else "<p>Apple raised guidance</p>")
 
-    provider = SECCurrent(["AAPL", "MSFT", "NVDA"], "Botfolio test@example.com", Mock(get=get))
+    provider = SECCurrent(["AAPL", "MSFT", "NV.B"], "Botfolio test@example.com", Mock(get=get))
     rows = provider.fetch(AT - timedelta(days=1), AT + timedelta(days=1))
+    assert [r.ticker for r in rows] == ["AAPL"]  # a failed download keeps the filings already read
+    down.clear()
+    rows += provider.fetch(AT - timedelta(days=1), AT + timedelta(days=1))
     assert [(r.ticker, r.source, r.source_id, r.text) for r in rows] == [
         ("AAPL", "sec", "0000320193-25-000001", "Apple raised guidance"),
-        ("NVDA", "sec", "0001045810-25-000001", "8-K - Company (0001045810) (Filer) Item 2.02: Results of Operations")]
+        ("NV.B", "sec", "0001045810-25-000001", "8-K - Company (0001045810) (Filer) Item 2.02: Results of Operations")]
     assert rows[0].source_url.endswith("/000032019325000001/0000320193-25-000001.txt")
     assert provider.fetch(AT - timedelta(days=1), AT + timedelta(days=1)) == []
-    assert calls.count(SECCurrent.TICKERS) == 1 and len(calls) == 5  # tickers, feed, 2 filings, feed
+    assert calls.count(SECCurrent.TICKERS) == 1 and len(calls) == 7  # tickers, 3 feeds, 3 filings
 
 
 def test_prompt_states_the_executed_trade(monkeypatch):

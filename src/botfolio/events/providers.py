@@ -232,8 +232,10 @@ class SECCurrent:
     def fetch(self, start, end):
         now = datetime.now(UTC)
         if self.loaded is None or now - self.loaded > timedelta(days=1):
-            self.ciks = {int(c["cik_str"]): c["ticker"] for c in reversed(self.http.get(self.TICKERS).json().values())}
-            self.loaded = now  # reversed: a company's primary share class is listed first and wins
+            ciks = {}
+            for c in self.http.get(self.TICKERS).json().values():  # every share class; the SEC writes BRK-B
+                ciks.setdefault(int(c["cik_str"]), set()).add(c["ticker"].replace("-", "."))
+            self.ciks, self.loaded = ciks, now
         atom = "{http://www.w3.org/2005/Atom}"
         result = []
         for entry in ElementTree.fromstring(self.http.get(self.FEED).content).findall(atom + "entry"):
@@ -241,21 +243,24 @@ class SECCurrent:
             found = re.search(r"/data/(\d+)/\d+/(\d{10}-\d{2}-\d{6})-index", link)
             if not found or entry.findtext(atom + "title", "").split(" - ")[0] != "8-K":
                 continue
-            ticker, accession = self.ciks.get(int(found[1])), found[2]
+            tickers, accession = sorted(self.ciks.get(int(found[1]), set()) & set(self.symbols)), found[2]
             try:
                 published = datetime.fromisoformat(entry.findtext(atom + "updated", ""))
             except ValueError:
                 continue
-            if (ticker not in self.symbols or accession in self.seen or published.utcoffset() is None
+            if (not tickers or accession in self.seen or published.utcoffset() is None
                     or not start <= published <= end):
                 continue
             url = link.replace("-index.htm", ".txt")
-            content = plain(self.http.get(url).text)
+            try:
+                content = plain(self.http.get(url).text)
+            except requests.RequestException:
+                continue  # not marked seen: retried on the next poll, and the filings already read are kept
             if len(content) > 200_000:
                 # Exhibit-heavy filings: the feed's item list ("Item 2.02: Results of Operations") still says what happened.
                 content = plain(f"{entry.findtext(atom + 'title', '')} {entry.findtext(atom + 'summary', '')}")
             self.seen.add(accession)
-            result.append(Event(source="sec", source_id=accession, ticker=ticker, event_type="filing",
+            result += [Event(source="sec", source_id=accession, ticker=ticker, event_type="filing",
                 published_at=published, content_at=published, received_at=datetime.now(UTC),
-                source_url=url, text=content))
+                source_url=url, text=content) for ticker in tickers]
         return result
