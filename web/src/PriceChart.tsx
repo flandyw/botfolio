@@ -265,9 +265,17 @@ export function PriceChart({ bars, overlays, liveBar, className, annotations, pr
 
   const byTime = useMemo(() => new Map(bars.map((bar, i) => [bar.time, i])), [bars]);
   const at = cursor != null ? byTime.get(cursor) : undefined;
-  const latest = live && live.time >= (bars.at(-1)?.time ?? 0) ? live : bars.at(-1);
-  const bar = at != null ? bars[at] : cursor == null ? latest : undefined;
-  const before = at != null ? bars[at - 1]?.close : bar === live ? bars.at(live.time > (bars.at(-1)?.time ?? 0) ? -1 : -2)?.close : bars.at(-2)?.close;
+  const last = bars.at(-1);
+  // A streamed candle newer than the loaded history has no indicator values and no known previous close.
+  const streamed = live && live.time >= (last?.time ?? 0) ? live : null;
+  const bar =
+    at != null && !(streamed && streamed.time === cursor)
+      ? bars[at]
+      : cursor == null || cursor === streamed?.time
+        ? (streamed ?? last)
+        : undefined;
+  const index = bar ? byTime.get(bar.time) : undefined;
+  const before = index != null ? bars[index - 1]?.close : undefined;
   const change = bar && before ? (bar.close / before - 1) * 100 : null;
 
   return (
@@ -284,7 +292,7 @@ export function PriceChart({ bars, overlays, liveBar, className, annotations, pr
             Vol <b className="font-medium text-ink">{compact(bar.volume)}</b>
           </span>
           {lines.map(({ label, color, digits, values }) => {
-            const value = values.get(bar.time) ?? (cursor == null ? [...values.values()].at(-1) : undefined);
+            const value = values.get(bar.time);
             return (
               value != null && (
                 <span key={label} style={{ color }}>

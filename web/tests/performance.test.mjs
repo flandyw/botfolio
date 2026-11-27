@@ -103,6 +103,7 @@ test("trade quality, return bins and the P&L calendar", () => {
   const bins = returnBins([-2, 0.5, 2], 4);
   assert.deepEqual(bins.map((b) => b.count), [1, 0, 1, 1]);
   assert.deepEqual(returnBins([]), []);
+  assert.equal(returnBins([0, 0], 4).reduce((sum, b) => sum + b.count, 0), 2);
 
   const at = (date) => Date.parse(`${date}T20:00:00Z`) / 1000;
   const weeks = pnlCalendar([

@@ -72,8 +72,8 @@ export function tradeQuality(s: StrategyResult) {
 
 /** Counts of trade returns (in percent) in equal-width bins centred on zero. */
 export function returnBins(returns: number[], bins = 12) {
-  const reach = Math.max(...returns.map(Math.abs), 0);
-  if (!reach) return [];
+  if (!returns.length) return [];
+  const reach = Math.max(...returns.map(Math.abs)) || 1;
   const width = (2 * reach) / bins;
   const out = Array.from({ length: bins }, (_, i) => ({ from: -reach + i * width, to: -reach + (i + 1) * width, count: 0 }));
   for (const r of returns) out[Math.min(bins - 1, Math.floor((r + reach) / width))].count++;
