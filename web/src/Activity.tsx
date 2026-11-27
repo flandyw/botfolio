@@ -3,13 +3,12 @@ import type { JournalRow, TradeActivity, TradeFill } from "./api";
 import { cx } from "./classes";
 import { LINES } from "./chart";
 import { etDateTime, etExecutionTime, num, pct, signed, signedUsd, tone, usd } from "./format";
-import { INDICATORS, PriceChart, type ChartAnnotations, type ChartOverlays } from "./PriceChart";
+import { INDICATORS, NO_OVERLAYS, PriceChart, type ChartAnnotations, type ChartOverlays } from "./PriceChart";
 import { duration, tradeStats } from "./tradeStats";
 import { STRATEGY_TITLES } from "./strategyInfo";
 import { Figure, Message } from "./ui";
 import { useApi } from "./useApi";
 
-const NO_OVERLAYS: ChartOverlays = { sma20: false, ema50: false, vwap: false, bb: false, rsi: false };
 const ratio = (v: number | null) => (v == null ? "—" : `${num(v)}R`);
 const selectClass = "min-w-0 rounded border border-rule bg-bg px-2 py-1.5 text-[13px]";
 

@@ -17,7 +17,17 @@ export const alpha = (hex: string, a: number) =>
 export const palette = () => ({ up: css("--up"), down: css("--down"), dim: css("--dim"), faint: css("--faint") });
 
 /** Indicator lines, readable on both themes. */
-export const LINES = { sma20: "#b07a1e", ema50: "#8a63b5", vwap: "#2b8591", bb: "#74829a", rsi: "#8d877b" };
+export const LINES = {
+  ema9: "#c2553f",
+  sma20: "#b07a1e",
+  ema50: "#8a63b5",
+  sma200: "#4f7fb8",
+  vwap: "#2b8591",
+  bb: "#74829a",
+  rsi: "#8d877b",
+  macd: "#4f7fb8",
+  atr: "#a0665c",
+};
 
 export function themeOptions(): DeepPartial<ChartOptions> {
   return {

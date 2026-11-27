@@ -95,3 +95,41 @@ export function calcRsi(bars: Bar[], period = 14): Point[] {
   }
   return out;
 }
+
+/** MACD(12, 26, 9): the fast/slow EMA spread, its signal line and their difference. */
+export function calcMacd(bars: Bar[], fast = 12, slow = 26, signal = 9) {
+  const slowEma = calcEma(bars, slow);
+  const fastAt = new Map(calcEma(bars, fast).map((p) => [p.time, p.value]));
+  const macd = slowEma.map((p) => ({ time: p.time, value: fastAt.get(p.time)! - p.value }));
+  const k = 2 / (signal + 1);
+  const signalLine: Point[] = [];
+  let ema = 0;
+  macd.forEach((p, i) => {
+    if (i < signal) ema += p.value / signal;
+    else ema = p.value * k + ema * (1 - k);
+    if (i >= signal - 1) signalLine.push({ time: p.time, value: ema });
+  });
+  const signalAt = new Map(signalLine.map((p) => [p.time, p.value]));
+  const histogram = macd.flatMap((p) =>
+    signalAt.has(p.time) ? [{ time: p.time, value: p.value - signalAt.get(p.time)! }] : [],
+  );
+  return { macd, signal: signalLine, histogram };
+}
+
+/** Wilder's average true range. */
+export function calcAtr(bars: Bar[], period = 14): Point[] {
+  const out: Point[] = [];
+  let atr = 0;
+  for (let i = 1; i < bars.length; i++) {
+    const prev = bars[i - 1].close;
+    const range = Math.max(bars[i].high - bars[i].low, Math.abs(bars[i].high - prev), Math.abs(bars[i].low - prev));
+    if (i <= period) {
+      atr += range / period;
+      if (i === period) out.push({ time: bars[i].time, value: atr });
+    } else {
+      atr = (atr * (period - 1) + range) / period;
+      out.push({ time: bars[i].time, value: atr });
+    }
+  }
+  return out;
+}

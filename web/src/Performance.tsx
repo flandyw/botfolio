@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { AlpacaAccountResponse, AlpacaPortfolioHistory, AlpacaStatus } from "./api";
+import type { AlpacaAccountResponse, AlpacaPortfolioHistory, AlpacaStatus, StrategyPerformance } from "./api";
 import { cx } from "./classes";
 import { pct, signedUsd, tone, usd } from "./format";
 import { PerformanceChart } from "./PerformanceChart";
+import { PnlCalendar } from "./PnlCalendar";
+import { StrategyStats } from "./StrategyStats";
 import { portfolioPerformance } from "./performanceData";
 import { PositionPerformance } from "./PositionPerformance";
 import { Button, Choice, Figure, Message, Section } from "./ui";
@@ -59,6 +61,8 @@ export function Performance({
       : null,
     60_000,
   );
+  const daily = useApi<AlpacaPortfolioHistory>(connected ? "alpaca/portfolio-history?period=3M&timeframe=1D" : null, 300_000);
+  const strategies = useApi<StrategyPerformance>(connected ? "strategies/performance" : null, 60_000);
   const account = useApi<AlpacaAccountResponse>(connected ? "alpaca/account" : null, 30_000);
   const stats = useMemo(() => portfolioPerformance(history.data?.points ?? []), [history.data]);
   const equity = stats.latest?.equity;
@@ -158,6 +162,15 @@ export function Performance({
                 )}
               </>
             )}
+          </Section>
+          <Section title="Strategies" note="Gross, from Alpaca Paper fills · all time">
+            {strategies.error && <Message error>{strategies.error}</Message>}
+            {strategies.loading && !strategies.data && <Message>Loading strategy results…</Message>}
+            {strategies.data && <StrategyStats data={strategies.data} />}
+          </Section>
+          <Section title="Daily P&L" note="Last 3 months · newest week first">
+            {daily.error && <Message error>{daily.error}</Message>}
+            {daily.data && <PnlCalendar points={daily.data.points} />}
           </Section>
           <Section title="Open positions" note="Live snapshot · independent of the selected period">
             {account.loading && <Message>Loading open positions…</Message>}

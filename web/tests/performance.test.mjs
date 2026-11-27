@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAlpacaBridge } from "../server/alpaca-bridge.ts";
-import { openPositionPerformance, portfolioPerformance } from "../src/performanceData.ts";
+import { openPositionPerformance, pnlCalendar, portfolioPerformance, returnBins, tradeQuality } from "../src/performanceData.ts";
 
 function point(time, equity, profitLoss, profitLossPct) {
   return { time, equity, profitLoss, profitLossPct };
@@ -93,4 +93,24 @@ test("open-position P&L is independent of long and short market exposure", () =>
     ["VGT", -5, -200],
   ]);
   assert.deepEqual(openPositionPerformance([]), { rows: [], pnl: 0, long: 0, short: 0 });
+});
+
+test("trade quality, return bins and the P&L calendar", () => {
+  const q = tradeQuality({ closed: 4, wins: 1, gross_win: 30, gross_loss: -15 });
+  assert.deepEqual(q, { winRate: 25, avgWin: 30, avgLoss: -5, expectancy: 3.75, profitFactor: 2 });
+  assert.equal(tradeQuality({ closed: 0, wins: 0, gross_win: 0, gross_loss: 0 }).profitFactor, null);
+
+  const bins = returnBins([-2, 0.5, 2], 4);
+  assert.deepEqual(bins.map((b) => b.count), [1, 0, 1, 1]);
+  assert.deepEqual(returnBins([]), []);
+
+  const at = (date) => Date.parse(`${date}T20:00:00Z`) / 1000;
+  const weeks = pnlCalendar([
+    point(at("2026-11-19"), 100, 0, 0),
+    point(at("2026-11-20"), 110, 10, 10), // Friday
+    point(at("2026-11-23"), 99, -1, -1), // Monday
+  ]);
+  assert.deepEqual(weeks.map((w) => w.monday), ["2026-11-16", "2026-11-23"]);
+  assert.deepEqual(weeks[0].days[4], { date: "2026-11-20", pnl: 10, pct: 10 });
+  assert.equal(weeks[1].days[0].pnl, -11);
 });

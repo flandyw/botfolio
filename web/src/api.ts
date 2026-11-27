@@ -147,6 +147,11 @@ export type StrategyPerformance = Partial<
       deployed: number;
       pnl: number;
       pnl_pct: number | null;
+      /** Summed realized P&L of winning and of losing closed trades. */
+      gross_win: number;
+      gross_loss: number;
+      /** Realized return on cost of each closed trade, in percent. */
+      returns: number[];
     }
   >
 >;
