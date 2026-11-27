@@ -122,7 +122,10 @@ def news_performance(executor, rows, store):
     with store.storage.tx() as conn:
         source = dict(conn.execute("SELECT event_key, json_extract(payload, '$.source') FROM events "
                                    f"WHERE event_key IN ({marks})", keys))
-        model = dict(conn.execute("SELECT event_key, model FROM event_decisions WHERE event_key "
-                                  f"IN ({marks}) AND model != 'none:none' ORDER BY completed_at DESC", keys))
+        # Only a BUY or SELL opens a trade; when several models decided an article, the first such call wins.
+        model = dict(conn.execute("SELECT event_key, model FROM event_decisions "
+                                  f"WHERE event_key IN ({marks}) AND model != 'none:none' ORDER BY "
+                                  "json_extract(payload, '$.recommended_action') IN ('BUY', 'SELL'), completed_at DESC",
+                                  keys))
     return {name: strategy_performance(executor, [{**r, "strategy": by.get(r["key"], "unknown")} for r in rows])
             for name, by in (("sources", source), ("models", model))}

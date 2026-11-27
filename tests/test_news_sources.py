@@ -91,8 +91,10 @@ def test_news_performance_groups_fills_by_source_and_model():
                   received_at=AT + timedelta(seconds=1), source_url="https://example.com/" + ticker, text="Guidance raised")
         store.add(e)
         with store.storage.tx() as conn:
-            conn.execute("INSERT INTO event_decisions VALUES (?,?,?,?,?,?,?,?,?)",
-                         (e.key, "exp", model, "{}", "{}", "{}", 0.1, None, AT.isoformat()))
+            conn.executemany("INSERT INTO event_decisions VALUES (?,?,?,?,?,?,?,?,?)", [
+                (e.key, "old", "chat:abstained", '{"recommended_action": "WAIT"}', "{}", "{}", 0.1, None, AT.isoformat()),
+                (e.key, "exp", model, '{"recommended_action": "BUY"}', "{}", "{}", 0.1, None,
+                 (AT + timedelta(minutes=1)).isoformat())])
         rows.append(dict(key=e.key, client_id="evt-" + ticker, symbol=ticker, side="long", opened=AT.isoformat()))
     rows.append(dict(key="m", client_id="evt-m", strategy="momentum", symbol="Q", side="long", opened=AT.isoformat()))
     broker = Broker([order("evt-X", 100, 10, [order("target", 103, 10)]), order("evt-Y", 50, 4, [order("stop", 49, 4)]),
