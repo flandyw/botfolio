@@ -15,7 +15,15 @@ from botfolio.data.calendar import frame_to_bars, get_calendar
 from botfolio.events.ai import Router
 from botfolio.events.context import market_context, news_context, since_prev_close
 from botfolio.events.paper import PaperExecutor, configured, entry_ready, event_is_fresh
-from botfolio.events.providers import ISSUER_FEEDS, AlpacaNews, IssuerNews, SECFilings, YahooNews
+from botfolio.events.providers import (
+    ISSUER_FEEDS,
+    AlpacaNews,
+    IssuerNews,
+    PRNewswire,
+    SECCurrent,
+    SECFilings,
+    YahooNews,
+)
 from botfolio.events.risk import risk_loop
 from botfolio.events.store import EventStore
 from botfolio.safety import PAPER_TRADING_URL
@@ -80,6 +88,10 @@ async def watch(cfg, store, experiment, once=False):
         providers.append(SECFilings(companies, os.environ["SEC_USER_AGENT"]))
     issuer_feeds = [IssuerNews(ticker, url) for ticker, url in ISSUER_FEEDS.items()]
     yahoo = YahooNews(cfg.symbols)
+    # Whole-watchlist feeds. Like issuer feeds, an outage here is logged and must not block trading.
+    wide = [PRNewswire(cfg.symbols)]
+    if os.getenv("SEC_USER_AGENT"):
+        wide.append(SECCurrent(cfg.symbols, os.environ["SEC_USER_AGENT"]))
     router = Router(experiment)
     paper = PaperExecutor(AlpacaClient(creds, timeout=5, max_retries=1), store,
                           int(os.getenv("EVENT_HOLD_MINUTES", "15")), cfg.limits(), cfg.data.feed)
@@ -97,13 +109,15 @@ async def watch(cfg, store, experiment, once=False):
                 watchlist = load_watchlist(store.storage, cfg)
                 router.configure(store.storage.get("ai-settings") or {})
                 providers[0].symbols = yahoo.symbols = watchlist
-                active_providers = providers + [yahoo] + [p for p in issuer_feeds if p.ticker in watchlist]
+                for provider in wide:
+                    provider.symbols = watchlist
+                active_providers = providers + [yahoo] + wide + [p for p in issuer_feeds if p.ticker in watchlist]
                 results = await asyncio.gather(*(p.poll(now-timedelta(days=1), now) for p in active_providers),
                                                return_exceptions=True)
                 failures = issuer_failures = 0
                 for provider, result in zip(active_providers, results, strict=True):
                     if isinstance(result, BaseException):
-                        if isinstance(provider, IssuerNews | YahooNews):
+                        if isinstance(provider, IssuerNews | YahooNews | SECCurrent):
                             issuer_failures += 1
                         else:
                             failures += 1
@@ -128,7 +142,8 @@ async def watch(cfg, store, experiment, once=False):
                         bars_df = await asyncio.to_thread(client.get_bars, [event.ticker, "SPY"],
                             event.received_at-timedelta(hours=2), event.received_at, "1Min", cfg.data.feed, "raw")
                         context = market_context(frame_to_bars(bars_df, get_calendar()), event, event.received_at)
-                        context.update(news_context(event, events, await asyncio.to_thread(company, client, event.ticker)))
+                        context.update(news_context(event, events, await asyncio.to_thread(company, client, event.ticker),
+                                                    paper.hold))
                         await asyncio.to_thread(router.analyze, store, event, context)
                         store.storage.put("news-assess-last", datetime.now(UTC).isoformat())
                 for event in sorted(events, key=lambda e: e.content_at, reverse=True):
@@ -147,7 +162,8 @@ async def watch(cfg, store, experiment, once=False):
                             context.update(since_prev_close(snapshots, event.ticker))
                         except Exception:
                             log.warning("snapshot unavailable; deciding without the move since the close")
-                        context.update(news_context(event, events, await asyncio.to_thread(company, client, event.ticker)))
+                        context.update(news_context(event, events, await asyncio.to_thread(company, client, event.ticker),
+                                                    paper.hold))
                         decision = await asyncio.to_thread(router.analyze, store, event, context)
                     state = store.storage.get("event-execution-state") or {}
                     if (cfg.strategies.news.enabled and configured() and state.get("phase") == "ready" and not failures

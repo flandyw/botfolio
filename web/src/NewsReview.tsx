@@ -4,6 +4,7 @@ import type { NewsReview as Review, ReviewCall } from "./api";
 import { LINES, palette, useChart, useThemeKey } from "./chart";
 import { cx } from "./classes";
 import { etDateTime, etTime, num, pct, tone } from "./format";
+import { NewsPerformance } from "./NewsPerformance";
 import { NewsAudit } from "./NewsAudit";
 import { Choice, Figure, Message, Section, SymbolLink } from "./ui";
 import { useApi } from "./useApi";
@@ -28,7 +29,14 @@ export function NewsPage({ onOpen }: { onOpen: (symbol: string) => void }) {
       <div className="mb-4">
         <Choice label="News view" value={view} onChange={setView} options={[["articles", "Articles"], ["review", "Call review"]]} />
       </div>
-      {view === "review" ? <NewsReview onOpen={onOpen} /> : <NewsAudit onOpen={onOpen} />}
+      {view === "review" ? (
+        <div className="grid gap-6">
+          <NewsPerformance />
+          <NewsReview onOpen={onOpen} />
+        </div>
+      ) : (
+        <NewsAudit onOpen={onOpen} />
+      )}
     </>
   );
 }

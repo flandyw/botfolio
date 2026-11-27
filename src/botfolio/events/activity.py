@@ -4,7 +4,6 @@ import math
 from datetime import UTC, datetime, timedelta
 
 from botfolio.data.calendar import ny_date
-from botfolio.events.paper import PaperExecutor
 from botfolio.events.review import chart_time
 
 
@@ -112,3 +111,18 @@ def strategy_performance(executor, rows):
         s["pnl"] = s["realized"] + s["unrealized"]
         s["pnl_pct"] = s["pnl"] / s["deployed"] * 100 if s["deployed"] else None
     return result
+
+
+def news_performance(executor, rows, store):
+    """P&L of news trades by the article's source and by the AI model that made the call, so a source or model
+    that loses can be switched off on evidence."""
+    rows = [r for r in rows if r.get("strategy", "news") == "news"]
+    keys = [r["key"] for r in rows]
+    marks = ",".join("?" * len(keys))
+    with store.storage.tx() as conn:
+        source = dict(conn.execute("SELECT event_key, json_extract(payload, '$.source') FROM events "
+                                   f"WHERE event_key IN ({marks})", keys))
+        model = dict(conn.execute("SELECT event_key, model FROM event_decisions WHERE event_key "
+                                  f"IN ({marks}) AND model != 'none:none' ORDER BY completed_at DESC", keys))
+    return {name: strategy_performance(executor, [{**r, "strategy": by.get(r["key"], "unknown")} for r in rows])
+            for name, by in (("sources", source), ("models", model))}
