@@ -401,6 +401,10 @@ export function createAlpacaBridge(cfg: AlpacaBridgeConfig = {}): AlpacaBridge {
               symbol,
               price: last,
               prevClose,
+              dailyClose: num(snap.dailyBar?.c),
+              dailyDay: snap.dailyBar?.t
+                ? new Date(nyChartTime(snap.dailyBar.t) * 1000).toISOString().slice(0, 10)
+                : null,
               change,
               changePct,
               open: num(snap.dailyBar?.o),

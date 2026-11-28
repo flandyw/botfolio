@@ -61,7 +61,12 @@ export function Performance({
       : null,
     60_000,
   );
-  const daily = useApi<AlpacaPortfolioHistory>(connected ? "alpaca/portfolio-history?period=3M&timeframe=1D" : null, 300_000);
+  // The 3M chart already loads the daily history the calendar needs.
+  const ownDaily = useApi<AlpacaPortfolioHistory>(
+    connected && period !== "3M" ? "alpaca/portfolio-history?period=3M&timeframe=1D" : null,
+    300_000,
+  );
+  const daily = period === "3M" ? history : ownDaily;
   const strategies = useApi<StrategyPerformance>(connected ? "strategies/performance" : null, 60_000);
   const account = useApi<AlpacaAccountResponse>(connected ? "alpaca/account" : null, 30_000);
   const stats = useMemo(() => portfolioPerformance(history.data?.points ?? []), [history.data]);

@@ -5,6 +5,7 @@ import { cell, cx } from "./classes";
 import { compact, num, pct, signed, tone } from "./format";
 import { type ChartOverlays, INDICATORS, NO_OVERLAYS, PriceChart } from "./PriceChart";
 import { Choice, Message } from "./ui";
+import { previousClose } from "./indicators";
 import { useApi } from "./useApi";
 
 const TIMEFRAMES = [
@@ -188,7 +189,7 @@ export function Markets({
             bars={bars.data}
             overlays={overlays}
             liveBar={liveBar}
-            prevClose={timeframe === "D" ? null : snap?.prevClose}
+            prevClose={timeframe === "D" ? null : previousClose(snap, Math.max(bars.data.at(-1)?.time ?? 0, liveBar?.time ?? 0))}
             className="h-[min(64svh,640px)] min-h-[360px] w-full"
           />
         )}

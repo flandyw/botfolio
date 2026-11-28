@@ -147,6 +147,8 @@ export type StrategyPerformance = Partial<
       deployed: number;
       pnl: number;
       pnl_pct: number | null;
+      /** Closed trades that lost money; break-even trades are neither wins nor losses. */
+      losses: number;
       /** Summed realized P&L of winning and of losing closed trades. */
       gross_win: number;
       gross_loss: number;
@@ -284,6 +286,9 @@ export type AlpacaSnapshot = {
   symbol: string;
   price: number | null;
   prevClose: number | null;
+  /** Close and New York date of the latest daily bar, which is the prior session until today's opens. */
+  dailyClose: number | null;
+  dailyDay: string | null;
   change: number | null;
   changePct: number | null;
   open: number | null;

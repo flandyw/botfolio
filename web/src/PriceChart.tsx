@@ -32,6 +32,23 @@ export type IndicatorKey = (typeof INDICATORS)[number][0];
 export type ChartOverlays = Record<IndicatorKey, boolean>;
 export const NO_OVERLAYS = Object.fromEntries(INDICATORS.map(([key]) => [key, false])) as ChartOverlays;
 
+/** Every enabled indicator's points under its legend label. */
+function indicatorSeries(bars: Bar[], on: ChartOverlays): (readonly [string, { time: number; value: number }[]])[] {
+  const bb = on.bb ? calcBollinger(bars, 20, 2) : null;
+  const macd = on.macd ? calcMacd(bars) : null;
+  return [
+    ...(on.ema9 ? [["EMA 9", calcEma(bars, 9)] as const] : []),
+    ...(on.sma20 ? [["SMA 20", calcSma(bars, 20)] as const] : []),
+    ...(on.ema50 ? [["EMA 50", calcEma(bars, 50)] as const] : []),
+    ...(on.sma200 ? [["SMA 200", calcSma(bars, 200)] as const] : []),
+    ...(on.vwap ? [["VWAP", calcVwap(bars)] as const] : []),
+    ...(bb ? [["BB upper", bb.upper] as const, ["BB lower", bb.lower] as const] : []),
+    ...(on.rsi ? [["RSI 14", calcRsi(bars, 14)] as const] : []),
+    ...(macd ? [["MACD", macd.macd] as const, ["Signal", macd.signal] as const] : []),
+    ...(on.atr ? [["ATR 14", calcAtr(bars, 14)] as const] : []),
+  ];
+}
+
 type LegendLine = { label: string; color: string; digits: number; values: Map<number, number> };
 
 export type ChartAnnotations = {
@@ -274,6 +291,17 @@ export function PriceChart({ bars, overlays, liveBar, className, annotations, pr
       : cursor == null || cursor === streamed?.time
         ? (streamed ?? last)
         : undefined;
+  // Readings for a streamed candle are computed with it appended to the history, as the chart will once it reloads.
+  const liveReadings = useMemo(() => {
+    if (!streamed) return null;
+    const series = [...bars.filter((b) => b.time < streamed.time), streamed];
+    return new Map(
+      indicatorSeries(series, overlays).flatMap(([label, points]) => {
+        const point = points.at(-1);
+        return point?.time === streamed.time ? [[label, point.value] as const] : [];
+      }),
+    );
+  }, [bars, streamed, overlays]);
   const index = bar ? byTime.get(bar.time) : undefined;
   const before = index != null ? bars[index - 1]?.close : undefined;
   const change = bar && before ? (bar.close / before - 1) * 100 : null;
@@ -292,7 +320,7 @@ export function PriceChart({ bars, overlays, liveBar, className, annotations, pr
             Vol <b className="font-medium text-ink">{compact(bar.volume)}</b>
           </span>
           {lines.map(({ label, color, digits, values }) => {
-            const value = values.get(bar.time);
+            const value = values.get(bar.time) ?? (bar === streamed ? liveReadings?.get(label) : undefined);
             return (
               value != null && (
                 <span key={label} style={{ color }}>

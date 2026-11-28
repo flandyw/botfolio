@@ -58,9 +58,8 @@ type StrategyResult = NonNullable<StrategyPerformance[keyof StrategyPerformance]
 
 /** Closed-trade quality for one strategy. Ratios are null until there are trades to divide by. */
 export function tradeQuality(s: StrategyResult) {
-  const losses = s.closed - s.wins;
   const avgWin = s.wins ? s.gross_win / s.wins : null;
-  const avgLoss = losses ? s.gross_loss / losses : null;
+  const avgLoss = s.losses ? s.gross_loss / s.losses : null;
   return {
     winRate: s.closed ? (s.wins / s.closed) * 100 : null,
     avgWin,
@@ -87,7 +86,10 @@ export function pnlCalendar(points: AlpacaHistoryPoint[]) {
   const weeks: { monday: string; days: ({ date: string; pnl: number; pct: number | null } | null)[] }[] = [];
   let previous: AlpacaHistoryPoint | null = null;
   for (const point of points) {
-    if (point.equity == null || point.equity === 0 || point.profitLoss == null) continue;
+    if (point.equity == null || point.equity === 0 || point.profitLoss == null) {
+      previous = null; // a missing observation leaves a gap; the next cell must not span several sessions
+      continue;
+    }
     if (previous) {
       const date = etDay.format(new Date(point.time * 1000));
       const day = new Date(`${date}T12:00:00Z`);

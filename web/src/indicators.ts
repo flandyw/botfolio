@@ -133,3 +133,14 @@ export function calcAtr(bars: Bar[], period = 14): Point[] {
   }
   return out;
 }
+
+/** The close before the session a chart ends on. Before the open Alpaca's latest daily bar is still the prior
+ *  session, so its close is the reference; once today's bar exists the reference is the bar before it. */
+export function previousClose(
+  snap: { prevClose: number | null; dailyClose: number | null; dailyDay: string | null } | undefined,
+  lastBarTime: number,
+): number | null {
+  if (!snap) return null;
+  const plotted = new Date(lastBarTime * 1000).toISOString().slice(0, 10);
+  return snap.dailyDay && lastBarTime && plotted > snap.dailyDay ? snap.dailyClose : snap.prevClose;
+}
