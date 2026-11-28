@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CandlestickSeries,
   HistogramSeries,
@@ -7,28 +7,49 @@ import {
   createSeriesMarkers,
   type AutoscaleInfoProvider,
   type ISeriesApi,
+  type MouseEventParams,
   type SeriesMarker,
   type Time,
 } from "lightweight-charts";
-import type { AlpacaStreamBar, Bar } from "./api";
+import type { AlpacaStreamBar, Bar, Point } from "./api";
+import { cx } from "./classes";
+import { compact, num, pct, tone } from "./format";
 import { LINES, alpha, palette, useChart, useThemeKey } from "./chart";
-import { calcBollinger, calcEma, calcRsi, calcSma, calcVwap } from "./indicators";
+import { calcAtr, calcBollinger, calcEma, calcMacd, calcRsi, calcSma, calcVwap } from "./indicators";
 
-export type ChartOverlays = {
-  sma20: boolean;
-  ema50: boolean;
-  vwap: boolean;
-  bb: boolean;
-  rsi: boolean;
-};
-
-export const INDICATORS: [keyof ChartOverlays, string][] = [
+export const INDICATORS = [
+  ["ema9", "EMA 9"],
   ["sma20", "SMA 20"],
   ["ema50", "EMA 50"],
+  ["sma200", "SMA 200"],
   ["vwap", "VWAP"],
   ["bb", "Bollinger 20, 2"],
   ["rsi", "RSI 14"],
-];
+  ["macd", "MACD 12, 26, 9"],
+  ["atr", "ATR 14"],
+] as const;
+export type IndicatorKey = (typeof INDICATORS)[number][0];
+export type ChartOverlays = Record<IndicatorKey, boolean>;
+export const NO_OVERLAYS = Object.fromEntries(INDICATORS.map(([key]) => [key, false])) as ChartOverlays;
+
+/** Every enabled indicator's points under its legend label. */
+function indicatorSeries(bars: Bar[], on: ChartOverlays): (readonly [string, { time: number; value: number }[]])[] {
+  const bb = on.bb ? calcBollinger(bars, 20, 2) : null;
+  const macd = on.macd ? calcMacd(bars) : null;
+  return [
+    ...(on.ema9 ? [["EMA 9", calcEma(bars, 9)] as const] : []),
+    ...(on.sma20 ? [["SMA 20", calcSma(bars, 20)] as const] : []),
+    ...(on.ema50 ? [["EMA 50", calcEma(bars, 50)] as const] : []),
+    ...(on.sma200 ? [["SMA 200", calcSma(bars, 200)] as const] : []),
+    ...(on.vwap ? [["VWAP", calcVwap(bars)] as const] : []),
+    ...(bb ? [["BB upper", bb.upper] as const, ["BB lower", bb.lower] as const] : []),
+    ...(on.rsi ? [["RSI 14", calcRsi(bars, 14)] as const] : []),
+    ...(macd ? [["MACD", macd.macd] as const, ["Signal", macd.signal] as const] : []),
+    ...(on.atr ? [["ATR 14", calcAtr(bars, 14)] as const] : []),
+  ];
+}
+
+type LegendLine = { label: string; color: string; digits: number; values: Map<number, number> };
 
 export type ChartAnnotations = {
   levels: { price: number; label: string; kind: "stop" | "target" | "signal" | "limit" }[];
@@ -49,19 +70,34 @@ type Props = {
   liveBar?: AlpacaStreamBar | null;
   className?: string;
   annotations?: ChartAnnotations;
+  /** The prior session's close, drawn as a reference line. */
+  prevClose?: number | null;
 };
 
-export function PriceChart({ bars, overlays, liveBar, className, annotations }: Props) {
+export function PriceChart({ bars, overlays, liveBar, className, annotations, prevClose }: Props) {
   const { ref, chart } = useChart();
   const themeKey = useThemeKey();
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const lastBarTimeRef = useRef<number>(0);
+  const [cursor, setCursor] = useState<number | null>(null);
+  const [lines, setLines] = useState<LegendLine[]>([]);
+  const [live, setLive] = useState<Bar | null>(null);
 
   useEffect(() => {
     if (!chart) return;
     const handles: ISeriesApi<"Candlestick" | "Histogram" | "Line">[] = [];
-    const { up, down, dim } = palette();
+    const legend: LegendLine[] = [];
+    const { up, down, dim, faint } = palette();
+    const plain = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false } as const;
+    /** A line on pane `pane`, listed in the legend when it has a label. */
+    const line = (points: Point[], color: string, label?: string, pane = 0, style = LineStyle.Solid, digits = 2) => {
+      const s = chart.addSeries(LineSeries, { ...plain, color, lineWidth: 1, lineStyle: style }, pane);
+      s.setData(points.map((p) => ({ time: p.time as Time, value: p.value })));
+      handles.push(s);
+      if (label) legend.push({ label, color, digits, values: new Map(points.map((p) => [p.time, p.value])) });
+      return s;
+    };
     const levels = annotations?.levels ?? [];
     const prices = [...levels, ...(annotations?.markers ?? [])].map(({ price }) => price);
     const includeAnnotations: AutoscaleInfoProvider | undefined = prices.length === 0 ? undefined : (original) => {
@@ -158,97 +194,60 @@ export function PriceChart({ bars, overlays, liveBar, className, annotations }: 
       });
     }
 
-    if (overlays.sma20) {
-      const s = chart.addSeries(LineSeries, {
-        color: LINES.sma20,
+    if (prevClose != null && !annotations) {
+      candles.createPriceLine({
+        price: prevClose,
+        title: "prev close",
+        color: faint,
         lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: false,
+        lineStyle: LineStyle.Dotted,
+        axisLabelVisible: true,
       });
-      s.setData(calcSma(bars, 20).map((p) => ({ time: p.time as Time, value: p.value })));
-      handles.push(s);
     }
 
-    if (overlays.ema50) {
-      const s = chart.addSeries(LineSeries, {
-        color: LINES.ema50,
-        lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-      s.setData(calcEma(bars, 50).map((p) => ({ time: p.time as Time, value: p.value })));
-      handles.push(s);
-    }
-
-    if (overlays.vwap) {
-      const s = chart.addSeries(LineSeries, {
-        color: LINES.vwap,
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-      s.setData(calcVwap(bars).map((p) => ({ time: p.time as Time, value: p.value })));
-      handles.push(s);
-    }
-
+    if (overlays.ema9) line(calcEma(bars, 9), LINES.ema9, "EMA 9");
+    if (overlays.sma20) line(calcSma(bars, 20), LINES.sma20, "SMA 20");
+    if (overlays.ema50) line(calcEma(bars, 50), LINES.ema50, "EMA 50");
+    if (overlays.sma200) line(calcSma(bars, 200), LINES.sma200, "SMA 200");
+    if (overlays.vwap) line(calcVwap(bars), LINES.vwap, "VWAP", 0, LineStyle.Dashed);
     if (overlays.bb) {
       const bb = calcBollinger(bars, 20, 2);
-      const u = chart.addSeries(LineSeries, {
-        color: LINES.bb,
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-      const l = chart.addSeries(LineSeries, {
-        color: LINES.bb,
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-      u.setData(bb.upper.map((p) => ({ time: p.time as Time, value: p.value })));
-      l.setData(bb.lower.map((p) => ({ time: p.time as Time, value: p.value })));
-      handles.push(u, l);
+      line(bb.upper, LINES.bb, "BB upper", 0, LineStyle.Dotted);
+      line(bb.lower, LINES.bb, "BB lower", 0, LineStyle.Dotted);
     }
 
+    // Each oscillator gets its own pane below the price.
+    let pane = 0;
     if (overlays.rsi) {
-      const rsi = chart.addSeries(
-        LineSeries,
-        {
-          color: LINES.rsi,
-          lineWidth: 1,
-          priceLineVisible: false,
-          priceFormat: { type: "custom", formatter: (v: number) => v.toFixed(0) },
-        },
-        1,
-      );
-      rsi.setData(calcRsi(bars, 14).map((p) => ({ time: p.time as Time, value: p.value })));
-      rsi.createPriceLine({
-        price: 70,
-        color: alpha(down, 0.5),
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: "70",
-      });
-      rsi.createPriceLine({
-        price: 30,
-        color: alpha(up, 0.5),
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: "30",
-      });
-      handles.push(rsi);
-      const panes = chart.panes();
-      if (panes[1]) panes[1].setHeight(115);
+      const rsi = line(calcRsi(bars, 14), LINES.rsi, "RSI 14", ++pane, LineStyle.Solid, 1);
+      rsi.applyOptions({ priceFormat: { type: "custom", formatter: (v: number) => v.toFixed(0) } });
+      for (const [price, color] of [[70, down], [30, up]] as const) {
+        rsi.createPriceLine({ price, color: alpha(color, 0.5), lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true });
+      }
     }
+    if (overlays.macd) {
+      const macd = calcMacd(bars);
+      const at = ++pane;
+      const histogram = chart.addSeries(HistogramSeries, { ...plain }, at);
+      histogram.setData(
+        macd.histogram.map((p) => ({ time: p.time as Time, value: p.value, color: alpha(p.value >= 0 ? up : down, 0.45) })),
+      );
+      handles.push(histogram);
+      line(macd.macd, LINES.macd, "MACD", at, LineStyle.Solid, 3);
+      line(macd.signal, LINES.sma20, "Signal", at, LineStyle.Solid, 3);
+    }
+    if (overlays.atr) line(calcAtr(bars, 14), LINES.atr, "ATR 14", ++pane);
+    chart.panes().forEach((p, i) => p.setStretchFactor(i ? 1 : 4));
+    setLines(legend);
+    setLive(null);
+
+    const onMove = ({ time }: MouseEventParams<Time>) => setCursor(typeof time === "number" ? time : null);
+    chart.subscribeCrosshairMove(onMove);
 
     chart.timeScale().fitContent();
 
     return () => {
+      chart.unsubscribeCrosshairMove(onMove);
       candleRef.current = null;
       volumeRef.current = null;
       for (const s of handles) {
@@ -259,13 +258,14 @@ export function PriceChart({ bars, overlays, liveBar, className, annotations }: 
         }
       }
     };
-  }, [chart, bars, overlays, themeKey, annotations]);
+  }, [chart, bars, overlays, themeKey, annotations, prevClose]);
 
   // Apply incoming live Alpaca WebSocket bar directly onto the chart
   useEffect(() => {
     if (!liveBar || !candleRef.current || !volumeRef.current) return;
     if (liveBar.time < lastBarTimeRef.current) return;
     lastBarTimeRef.current = liveBar.time;
+    setLive(liveBar);
     candleRef.current.update({
       time: liveBar.time as Time,
       open: liveBar.open,
@@ -280,11 +280,55 @@ export function PriceChart({ bars, overlays, liveBar, className, annotations }: 
     });
   }, [liveBar]);
 
+  const byTime = useMemo(() => new Map(bars.map((bar, i) => [bar.time, i])), [bars]);
+  const at = cursor != null ? byTime.get(cursor) : undefined;
+  const last = bars.at(-1);
+  // A streamed candle newer than the loaded history has no indicator values and no known previous close.
+  const streamed = live && live.time >= (last?.time ?? 0) ? live : null;
+  const bar =
+    at != null && !(streamed && streamed.time === cursor)
+      ? bars[at]
+      : cursor == null || cursor === streamed?.time
+        ? (streamed ?? last)
+        : undefined;
+  // Readings for a streamed candle are computed with it appended to the history, as the chart will once it reloads.
+  const liveReadings = useMemo(() => {
+    if (!streamed) return null;
+    const series = [...bars.filter((b) => b.time < streamed.time), streamed];
+    return new Map(
+      indicatorSeries(series, overlays).flatMap(([label, points]) => {
+        const point = points.at(-1);
+        return point?.time === streamed.time ? [[label, point.value] as const] : [];
+      }),
+    );
+  }, [bars, streamed, overlays]);
+  const index = bar ? byTime.get(bar.time) : undefined;
+  const before = index != null ? bars[index - 1]?.close : undefined;
+  const change = bar && before ? (bar.close / before - 1) * 100 : null;
+
   return (
     <div className="relative">
-      {overlays.rsi && (
-        <div className="pointer-events-none absolute bottom-[138px] left-0 z-[2] bg-bg pr-1.5 text-[11px] text-dim">
-          RSI 14
+      {bar && (
+        <div className="num pointer-events-none absolute top-1 left-1 z-[3] flex max-w-[calc(100%-5rem)] flex-wrap gap-x-3 gap-y-0.5 bg-bg/85 px-1 text-[11px] leading-4 text-dim">
+          <span>
+            O <b className="font-medium text-ink">{num(bar.open)}</b> H <b className="font-medium text-ink">{num(bar.high)}</b>{" "}
+            L <b className="font-medium text-ink">{num(bar.low)}</b> C{" "}
+            <b className={cx("font-medium", bar.close >= bar.open ? "text-up" : "text-down")}>{num(bar.close)}</b>
+          </span>
+          {change != null && <span className={tone(change)}>{pct(change)}</span>}
+          <span>
+            Vol <b className="font-medium text-ink">{compact(bar.volume)}</b>
+          </span>
+          {lines.map(({ label, color, digits, values }) => {
+            const value = values.get(bar.time) ?? (bar === streamed ? liveReadings?.get(label) : undefined);
+            return (
+              value != null && (
+                <span key={label} style={{ color }}>
+                  {label} {num(value, digits)}
+                </span>
+              )
+            );
+          })}
         </div>
       )}
       <div ref={ref} className={className ?? "h-[420px] w-full"} />

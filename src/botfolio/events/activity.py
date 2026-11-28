@@ -100,7 +100,8 @@ def strategy_performance(executor, rows):
         mark = marks.get(row["symbol"])
         unrealized = (mark - entry["price"]) * held * sign if held > 1e-9 and mark else 0.0
         s = result.setdefault(row.get("strategy", "news"), dict(
-            trades=0, closed=0, wins=0, realized=0.0, unrealized=0.0, deployed=0.0))
+            trades=0, closed=0, wins=0, losses=0, realized=0.0, unrealized=0.0, deployed=0.0, gross_win=0.0, gross_loss=0.0,
+            returns=[]))
         s["trades"] += 1
         s["realized"] += realized
         s["unrealized"] += unrealized
@@ -108,6 +109,9 @@ def strategy_performance(executor, rows):
         if held <= 1e-9:
             s["closed"] += 1
             s["wins"] += realized > 0
+            s["losses"] += realized < 0
+            s["gross_win" if realized > 0 else "gross_loss"] += realized
+            s["returns"].append(round(realized / (entry["price"] * entry["qty"]) * 100, 3))
     for s in result.values():
         s["pnl"] = s["realized"] + s["unrealized"]
         s["pnl_pct"] = s["pnl"] / s["deployed"] * 100 if s["deployed"] else None

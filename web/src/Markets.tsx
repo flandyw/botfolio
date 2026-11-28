@@ -3,8 +3,9 @@ import type { AlpacaSnapshot, AlpacaStreamBar, Bar } from "./api";
 import { LINES } from "./chart";
 import { cell, cx } from "./classes";
 import { compact, num, pct, signed, tone } from "./format";
-import { type ChartOverlays, INDICATORS, PriceChart } from "./PriceChart";
+import { type ChartOverlays, INDICATORS, NO_OVERLAYS, PriceChart } from "./PriceChart";
 import { Choice, Message } from "./ui";
+import { previousClose } from "./indicators";
 import { useApi } from "./useApi";
 
 const TIMEFRAMES = [
@@ -63,13 +64,7 @@ export function Markets({
   const [sort, setSort] = useState<{ key: SortKey; down: boolean } | null>(null);
   const [timeframe, setTimeframe] = useState<Timeframe>("5");
   const [days, setDays] = useState(30);
-  const [overlays, setOverlays] = useState<ChartOverlays>({
-    sma20: true,
-    ema50: false,
-    vwap: true,
-    bb: false,
-    rsi: false,
-  });
+  const [overlays, setOverlays] = useState<ChartOverlays>({ ...NO_OVERLAYS, sma20: true, vwap: true });
 
   const rows = useMemo(() => {
     const bySymbol = new Map(snapshots.map((s) => [s.symbol, s]));
@@ -194,6 +189,7 @@ export function Markets({
             bars={bars.data}
             overlays={overlays}
             liveBar={liveBar}
+            prevClose={timeframe === "D" ? null : previousClose(snap, Math.max(bars.data.at(-1)?.time ?? 0, liveBar?.time ?? 0))}
             className="h-[min(64svh,640px)] min-h-[360px] w-full"
           />
         )}

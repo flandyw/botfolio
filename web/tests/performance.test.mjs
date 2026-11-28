@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAlpacaBridge } from "../server/alpaca-bridge.ts";
-import { openPositionPerformance, portfolioPerformance } from "../src/performanceData.ts";
+import { previousClose } from "../src/indicators.ts";
+import { openPositionPerformance, pnlCalendar, portfolioPerformance, returnBins, tradeQuality } from "../src/performanceData.ts";
 
 function point(time, equity, profitLoss, profitLossPct) {
   return { time, equity, profitLoss, profitLossPct };
@@ -93,4 +94,44 @@ test("open-position P&L is independent of long and short market exposure", () =>
     ["VGT", -5, -200],
   ]);
   assert.deepEqual(openPositionPerformance([]), { rows: [], pnl: 0, long: 0, short: 0 });
+});
+
+test("trade quality, return bins and the P&L calendar", () => {
+  const q = tradeQuality({ closed: 4, wins: 1, losses: 3, gross_win: 30, gross_loss: -15 });
+  assert.deepEqual(q, { winRate: 25, avgWin: 30, avgLoss: -5, expectancy: 3.75, profitFactor: 2 });
+  assert.equal(tradeQuality({ closed: 0, wins: 0, losses: 0, gross_win: 0, gross_loss: 0 }).profitFactor, null);
+  // A break-even trade is not a loss: one $20 loss and one flat trade average a $20 loss.
+  assert.equal(tradeQuality({ closed: 2, wins: 0, losses: 1, gross_win: 0, gross_loss: -20 }).avgLoss, -20);
+
+  const bins = returnBins([-2, 0.5, 2], 4);
+  assert.deepEqual(bins.map((b) => b.count), [1, 0, 1, 1]);
+  assert.deepEqual(returnBins([]), []);
+  assert.equal(returnBins([0, 0], 4).reduce((sum, b) => sum + b.count, 0), 2);
+
+  const at = (date) => Date.parse(`${date}T20:00:00Z`) / 1000;
+  const weeks = pnlCalendar([
+    point(at("2026-11-19"), 100, 0, 0),
+    point(at("2026-11-20"), 110, 10, 10), // Friday
+    point(at("2026-11-23"), 99, -1, -1), // Monday
+  ]);
+  assert.deepEqual(weeks.map((w) => w.monday), ["2026-11-16", "2026-11-23"]);
+  assert.deepEqual(weeks[0].days[4], { date: "2026-11-20", pnl: 10, pct: 10 });
+  assert.equal(weeks[1].days[0].pnl, -11);
+  const gapped = pnlCalendar([
+    point(at("2026-11-23"), 100, 0, 0),
+    point(at("2026-11-24"), null, null, null),
+    point(at("2026-11-25"), 105, 5, 5),
+    point(at("2026-11-26"), 107, 7, 7),
+  ]);
+  assert.deepEqual(gapped[0].days.map((d) => d?.pnl ?? null), [null, null, null, 2, null]);
+});
+
+test("the previous-close line follows the session the chart ends on", () => {
+  const at = (iso) => Date.parse(iso) / 1000; // chart times are New York wall-clock seconds
+  const premarket = { prevClose: 100, dailyClose: 105, dailyDay: "2026-11-23" }; // Tuesday before the open
+  assert.equal(previousClose(premarket, at("2026-11-24T08:15:00Z")), 105);
+  const regular = { prevClose: 105, dailyClose: 107, dailyDay: "2026-11-24" };
+  assert.equal(previousClose(regular, at("2026-11-24T10:00:00Z")), 105);
+  assert.equal(previousClose(premarket, at("2026-11-23T15:55:00Z")), 100); // chart still ends on Monday
+  assert.equal(previousClose(undefined, 0), null);
 });

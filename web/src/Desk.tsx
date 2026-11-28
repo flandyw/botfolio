@@ -2,6 +2,7 @@ import { useState } from "react";
 import type {
   AlpacaAccountResponse,
   AlpacaPortfolioHistory,
+  AlpacaPosition,
   AlpacaStatus,
   BenchmarkSettings,
   Live,
@@ -32,6 +33,55 @@ function limits(name: StrategyName, c: StrategyConfig | undefined, etfs: number)
   if (name === "cash_park") return `Up to ${num(c.position_pct, 0)}% of equity`;
   if (name === "pullback") return `Up to ${c.max_positions} positions · ${num(c.position_pct, 0)}% of equity each`;
   return `Up to ${c.max_positions} positions · ${num(c.position_pct, 0)}% of equity each · ${num(c.risk_pct, 1)}% risk`;
+}
+
+const SHADES = ["bg-ink", "bg-dim", "bg-faint"];
+
+/** Share of gross exposure plus cash held in each position, largest first. */
+function Allocation({
+  positions,
+  cash,
+  onOpen,
+}: {
+  positions: AlpacaPosition[];
+  cash: number;
+  onOpen: (symbol: string) => void;
+}) {
+  const parts = positions
+    .map((p) => ({ symbol: p.symbol, value: Math.abs(p.marketValue), pnl: p.unrealizedPlpc }))
+    .sort((a, b) => b.value - a.value);
+  const total = parts.reduce((sum, p) => sum + p.value, 0) + Math.max(cash, 0);
+  if (!parts.length || !total) return null;
+  return (
+    <div className="mt-4">
+      <div className="flex h-2 gap-px" role="img" aria-label="Allocation by position">
+        {parts.map((p, i) => (
+          <span
+            key={p.symbol}
+            title={`${p.symbol} ${num((p.value / total) * 100, 1)}%`}
+            className={cx("transition-[width] duration-200 motion-reduce:transition-none", SHADES[i % SHADES.length])}
+            style={{ width: `${(p.value / total) * 100}%` }}
+          />
+        ))}
+        <span className="flex-1 bg-hair" title="Cash" />
+      </div>
+      <ul className="num mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[12px] text-dim">
+        {parts.map((p, i) => (
+          <li key={p.symbol} className="flex items-center gap-1.5">
+            <span className={cx("size-2", SHADES[i % SHADES.length])} />
+            <button type="button" className="font-medium text-ink hover:underline" onClick={() => onOpen(p.symbol)}>
+              {p.symbol}
+            </button>
+            {num((p.value / total) * 100, 1)}%<span className={tone(p.pnl)}>{pct(p.pnl)}</span>
+          </li>
+        ))}
+        <li className="flex items-center gap-1.5">
+          <span className="size-2 bg-hair" />
+          Cash {num((Math.max(cash, 0) / total) * 100, 1)}%
+        </li>
+      </ul>
+    </div>
+  );
 }
 
 const secondsSince = (iso: string | null | undefined) => (iso ? (Date.now() - Date.parse(iso)) / 1000 : null);
@@ -124,6 +174,7 @@ export function Desk({
                 <span className="num">{usd(Math.abs(acct.shortMarketValue ?? 0))}</span>
               </Figure>
             </dl>
+            <Allocation positions={positions} cash={acct.cash ?? 0} onOpen={onOpen} />
             <div className="mt-4">
               {history.error ? (
                 <Message error>{history.error}</Message>

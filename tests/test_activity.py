@@ -33,3 +33,6 @@ def test_strategy_performance_splits_realized_and_open_pnl():
     assert result["news"]["pnl_pct"] == 3
     assert result["momentum"]["pnl"] == -8 and result["momentum"]["wins"] == 0 and result["momentum"]["closed"] == 1
     assert result["etf_trend"]["unrealized"] == 10 and result["etf_trend"]["closed"] == 0
+    assert result["news"]["gross_win"] == 30 and result["news"]["returns"] == [3.0]
+    assert result["news"]["losses"] == 0 and result["momentum"]["losses"] == 1
+    assert result["momentum"]["gross_loss"] == -8 and result["momentum"]["returns"] == [-4.0]
