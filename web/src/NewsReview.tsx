@@ -4,6 +4,7 @@ import type { NewsReview as Review, ReviewCall } from "./api";
 import { LINES, palette, useChart, useThemeKey } from "./chart";
 import { cx } from "./classes";
 import { etDateTime, etTime, num, pct, tone } from "./format";
+import { NewsPerformance } from "./NewsPerformance";
 import { NewsAudit } from "./NewsAudit";
 import { Choice, Figure, Message, Section, SymbolLink } from "./ui";
 import { useApi } from "./useApi";
@@ -28,7 +29,14 @@ export function NewsPage({ onOpen }: { onOpen: (symbol: string) => void }) {
       <div className="mb-4">
         <Choice label="News view" value={view} onChange={setView} options={[["articles", "Articles"], ["review", "Call review"]]} />
       </div>
-      {view === "review" ? <NewsReview onOpen={onOpen} /> : <NewsAudit onOpen={onOpen} />}
+      {view === "review" ? (
+        <div className="grid gap-6">
+          <NewsPerformance />
+          <NewsReview onOpen={onOpen} />
+        </div>
+      ) : (
+        <NewsAudit onOpen={onOpen} />
+      )}
     </>
   );
 }
@@ -61,7 +69,7 @@ function NewsReview({ onOpen }: { onOpen: (symbol: string) => void }) {
   return (
     <Section
       title="Were the AI's news calls right?"
-      note="Each call is judged on the hour after the bot saw the article, the news trade's holding period · ET"
+      note="Each call is judged on the hour after the bot saw the article; news trades themselves close sooner · ET"
     >
       <div className="mb-2 flex flex-wrap items-center gap-2 border-t border-rule pt-2 text-[13px]">
         <select value={r?.day ?? day} onChange={(e) => { setLimit(12); setDay(e.target.value); }} aria-label="Trading day" className={CTL}>
@@ -111,9 +119,9 @@ function NewsReview({ onOpen }: { onOpen: (symbol: string) => void }) {
             <span className={cx("num", tone(tradedAvg))}>{pct(tradedAvg)}</span>
             <span className="text-[13px] text-dim"> avg · {tradedCalls.length} trades</span>
           </Figure>
-          <Figure label="1% stop / 2% target hit">
+          <Figure label="2% stop hit">
             <span className="num">
-              {acted.filter((c) => c.bracket === "stop").length} / {acted.filter((c) => c.bracket === "target").length}
+              {acted.filter((c) => c.bracket === "stop").length} of {acted.length}
             </span>
             <span className="text-[13px] text-dim"> within the hour</span>
           </Figure>
@@ -128,7 +136,7 @@ function NewsReview({ onOpen }: { onOpen: (symbol: string) => void }) {
           <span><span style={{ color: NEWS }}>●</span> News published</span>
           <span><span className="text-up">▲</span> Buy entry · <span className="text-down">▼</span> Sell entry (first price after the bot saw it)</span>
           <span>○ Price after 60 min</span>
-          <span>Dashed lines: previous close, 1% stop, 2% target</span>
+          <span>Dashed lines: previous close, 2% stop</span>
         </p>
       )}
       {r && calls.length === 0 && <Message>{r.calls.length ? "No calls match these filters." : "The AI made no buy, sell or priced-in calls this day."}</Message>}
@@ -197,10 +205,7 @@ function ReviewChart({ call: c, prices }: { call: ReviewCall; prices: Review["pr
     line.setData(prices.time.map((t, i) => ({ time: t as Time, value: prices.close[i] })));
     const dashed = { lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true } as const;
     if (prices.prev_close != null) line.createPriceLine({ price: prices.prev_close, color: faint, title: "prev close", ...dashed });
-    if (!c.held) {
-      line.createPriceLine({ price: c.entry * (1 - 0.01 * c.side), color: down, title: "stop", ...dashed });
-      line.createPriceLine({ price: c.entry * (1 + 0.02 * c.side), color: up, title: "target", ...dashed });
-    }
+    if (!c.held) line.createPriceLine({ price: c.entry * (1 - 0.02 * c.side), color: down, title: "stop", ...dashed });
     // Markers must sit on bar times; the article can predate the first bar shown.
     const bar = (t: number) => prices.time.find((x) => x >= t) ?? prices.time[prices.time.length - 1];
     const early = c.published_time < prices.time[0];

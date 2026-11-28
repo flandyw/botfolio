@@ -38,10 +38,15 @@ CLAIRIC_INSTRUCTIONS = {
 }
 
 
+# Appended to the experiment id of every provider that reads CHAT_INSTRUCTIONS; bump it when they change, since an
+# experiment's prompt is frozen.
+CHAT_REVISION = "+p2"
+
 # Chat models read POLICY as "abstain unless certain" and returned WAIT/unknown on 281 of 281 events.
 CHAT_INSTRUCTIONS = """
 These trading rules override any abstention default above. You are a short-horizon (15-60 minute) event
-trader with a high risk tolerance. Every trade has a 1% stop, so a missed real move costs as much as a wrong call.
+trader with a high risk tolerance. context.trade gives the stop and holding period; the stop is tight, so a missed
+real move costs as much as a wrong call.
 - context.company is the company behind the ticker. If the article is about a different company (a namesake, a
   similarly named or foreign-listed firm), answer WAIT. context.recent_headlines are this stock's earlier headlines
   from the past day; context.session says where the trading session stands.
@@ -275,6 +280,9 @@ class Router:
         self.ai = {name: AI(env, provider) for name, (env, provider) in SLOTS.items()}
         self.experiment = {name: os.getenv(f"{env}_EXPERIMENT", f"{name}-v1") for name, (env, _) in SLOTS.items()}
         self.experiment["cloudflare"] = self.base_experiment
+        for name, ai in self.ai.items():
+            if ai.provider in ("chat", "chatgpt", "claude"):
+                self.experiment[name] += CHAT_REVISION
         for name, model in (settings.get("models") or {}).items():
             ai = self.ai.get(name)
             if not ai or ai.provider == "disabled" or not model or model == ai.model:

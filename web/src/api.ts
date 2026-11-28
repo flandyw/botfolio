@@ -434,3 +434,6 @@ export const send = <T,>(method: "POST" | "PUT", path: string, body: unknown = {
     headers: { "Content-Type": "application/json", "X-Botfolio": "1" },
     body: JSON.stringify(body),
   });
+
+type Result = NonNullable<StrategyPerformance[StrategyName]>;
+export type NewsPerformance = { sources: Record<string, Result>; models: Record<string, Result> };

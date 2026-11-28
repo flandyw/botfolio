@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
@@ -21,6 +22,7 @@ ISSUER_FEEDS = {
     "META": "https://about.fb.com/feed/",
     "AMZN": "https://www.aboutamazon.com/news/rss",
 }
+PRNEWSWIRE_FEED = "https://www.prnewswire.com/rss/news-releases-list.rss"
 YAHOO_FEED = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={}&region=US&lang=en-US"
 BROWSER = {"User-Agent": "Mozilla/5.0"}  # Yahoo answers 429 to the default requests agent
 
@@ -138,10 +140,26 @@ class IssuerNews:
                 or not published <= updated <= received or not start <= updated <= end
                 or not text or len(text) > 200_000 or not link.startswith("https://")):
                 continue
-            result.append(Event(source="rss:" + urlsplit(self.url).netloc, source_id=link,
-                ticker=self.ticker, event_type="news", published_at=published, content_at=updated,
-                received_at=received, source_url=link, text=text))
+            result += [Event(source="rss:" + urlsplit(self.url).netloc, source_id=link,
+                ticker=ticker, event_type="news", published_at=published, content_at=updated,
+                received_at=received, source_url=link, text=text) for ticker in self.tickers(text)]
         return result
+
+    def tickers(self, text):
+        return [self.ticker]
+
+
+class PRNewswire(IssuerNews):
+    """Company press releases straight from the wire. A release belongs to the watchlist symbols it names
+    with an exchange, e.g. "(NASDAQ: NVDA)"; releases naming none are dropped."""
+    LISTING = re.compile(r"\((?:NYSE(?: American| Arca)?|NASDAQ|Nasdaq(?:GS|GM|CM)?|CBOE|Cboe)\s*:\s*([A-Z][A-Z.]{0,5})\)")
+
+    def __init__(self, symbols, http=None):
+        super().__init__(None, PRNEWSWIRE_FEED, http)
+        self.symbols = symbols
+
+    def tickers(self, text):
+        return sorted(set(self.LISTING.findall(text)) & set(self.symbols))
 
 
 class YahooNews:
@@ -192,4 +210,62 @@ class SECFilings:
                 result.append(Event(source="sec", source_id=accession, ticker=ticker,
                     event_type="filing", published_at=published, content_at=published,
                     received_at=datetime.now(UTC), source_url=url, text=content))
+        return result
+
+
+class SECCurrent:
+    """8-K filings for the whole watchlist from EDGAR's current-filings feed: one request a poll, with tickers
+    mapped to CIKs from the SEC's own list, so no per-company setup."""
+    FEED = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&output=atom&count=100"
+    TICKERS = "https://www.sec.gov/files/company_tickers.json"
+
+    def __init__(self, symbols, user_agent: str, http=None, exclude=()):
+        if "@" not in user_agent:
+            raise ValueError("SEC_USER_AGENT must identify your organization and contact email")
+        # exclude: tickers SECFilings already follows; the same filing must not be archived and assessed twice.
+        # SECFilings skips submissions over 200,000 characters, so those are still reported here.
+        self.symbols, self.exclude = symbols, set(exclude)
+        self.http = http or HTTP({"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"}, interval=0.25)
+        self.ciks, self.loaded, self.seen = {}, None, set()
+
+    async def poll(self, start, end):
+        return await asyncio.to_thread(self.fetch, start, end)
+
+    def fetch(self, start, end):
+        now = datetime.now(UTC)
+        if self.loaded is None or now - self.loaded > timedelta(days=1):
+            ciks = {}
+            for c in self.http.get(self.TICKERS).json().values():  # every share class; the SEC writes BRK-B
+                ciks.setdefault(int(c["cik_str"]), set()).add(c["ticker"].replace("-", "."))
+            self.ciks, self.loaded = ciks, now
+        atom = "{http://www.w3.org/2005/Atom}"
+        result = []
+        for entry in ElementTree.fromstring(self.http.get(self.FEED).content).findall(atom + "entry"):
+            link = next((tag.get("href", "") for tag in entry.findall(atom + "link")), "")
+            found = re.search(r"/data/(\d+)/\d+/(\d{10}-\d{2}-\d{6})-index", link)
+            if not found or entry.findtext(atom + "title", "").split(" - ")[0] != "8-K":
+                continue
+            tickers, accession = sorted(self.ciks.get(int(found[1]), set()) & set(self.symbols)), found[2]
+            try:
+                published = datetime.fromisoformat(entry.findtext(atom + "updated", ""))
+            except ValueError:
+                continue
+            if (not tickers or accession in self.seen or published.utcoffset() is None
+                    or not start <= published <= end):
+                continue
+            url = link.replace("-index.htm", ".txt")
+            try:
+                raw = self.http.get(url).text
+            except (requests.RequestException, RuntimeError):  # RuntimeError: HTTP.get ran out of retries
+                continue  # not marked seen: retried on the next poll, and the filings already read are kept
+            if len(raw) <= 200_000:
+                tickers = [t for t in tickers if t not in self.exclude]
+            content = plain(raw)
+            if len(content) > 200_000:
+                # Exhibit-heavy filings: the feed's item list ("Item 2.02: Results of Operations") still says what happened.
+                content = plain(f"{entry.findtext(atom + 'title', '')} {entry.findtext(atom + 'summary', '')}")
+            self.seen.add(accession)
+            result += [Event(source="sec", source_id=accession, ticker=ticker, event_type="filing",
+                published_at=published, content_at=published, received_at=datetime.now(UTC),
+                source_url=url, text=content) for ticker in tickers]
         return result

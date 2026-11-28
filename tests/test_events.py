@@ -386,7 +386,7 @@ def test_router_applies_saved_models(monkeypatch):
     router.configure({"models": {"cloudflare": "clairic-flash", "vercel": "meta/muse-glimmer-30b"}})
     assert router.ai["cloudflare"].url.endswith("/@cf/cloudflare/clairic-flash")
     assert router.experiment["cloudflare"] == "clairic-v2+clairic-flash"
-    assert router.experiment["vercel"] == "muse-v1+meta-muse-glimmer-30b"
+    assert router.experiment["vercel"] == "muse-v1+p2+meta-muse-glimmer-30b"
     assert router.order == ["claude", "chatgpt", "vercel", "cloudflare"]  # the default priority
     router.configure({})
     assert router.experiment["cloudflare"] == "clairic-v2"

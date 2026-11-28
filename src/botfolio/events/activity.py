@@ -1,10 +1,10 @@
 """Read-only broker and market data for a selected journal entry."""
 
+import json
 import math
 from datetime import UTC, datetime, timedelta
 
 from botfolio.data.calendar import ny_date
-from botfolio.events.paper import PaperExecutor
 from botfolio.events.review import chart_time
 
 
@@ -116,3 +116,34 @@ def strategy_performance(executor, rows):
         s["pnl"] = s["realized"] + s["unrealized"]
         s["pnl_pct"] = s["pnl"] / s["deployed"] * 100 if s["deployed"] else None
     return result
+
+
+class _Snapshot:
+    """Answers repeated broker requests from the first response."""
+    def __init__(self, executor):
+        self.executor, self.seen = executor, {}
+
+    def request(self, method, path, **kwargs):
+        key = json.dumps([method, path, kwargs], sort_keys=True)
+        if key not in self.seen:
+            self.seen[key] = self.executor.request(method, path, **kwargs)
+        return self.seen[key]
+
+
+def news_performance(executor, rows, store):
+    """P&L of news trades by the article's source and by the AI model that made the call, so a source or model
+    that loses can be switched off on evidence."""
+    rows = [r for r in rows if r.get("strategy", "news") == "news"]
+    keys = [r["key"] for r in rows]
+    marks = ",".join("?" * len(keys))
+    with store.storage.tx() as conn:
+        source = dict(conn.execute("SELECT event_key, json_extract(payload, '$.source') FROM events "
+                                   f"WHERE event_key IN ({marks})", keys))
+        # Only a BUY or SELL opens a trade; when several models decided an article, the first such call wins.
+        model = dict(conn.execute("SELECT event_key, model FROM event_decisions "
+                                  f"WHERE event_key IN ({marks}) AND model != 'none:none' ORDER BY "
+                                  "json_extract(payload, '$.recommended_action') IN ('BUY', 'SELL'), completed_at DESC",
+                                  keys))
+    snapshot = _Snapshot(executor)  # both tables read the same orders and positions
+    return {name: strategy_performance(snapshot, [{**r, "strategy": by.get(r["key"], "unknown")} for r in rows])
+            for name, by in (("sources", source), ("models", model))}

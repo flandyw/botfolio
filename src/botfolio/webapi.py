@@ -20,7 +20,7 @@ from starlette.staticfiles import StaticFiles
 from botfolio.config import AppConfig, load_credentials, watchlist
 from botfolio.data.alpaca import AlpacaClient
 from botfolio.data.calendar import ny_date
-from botfolio.events.activity import strategy_performance, trade_activity
+from botfolio.events.activity import news_performance, strategy_performance, trade_activity
 from botfolio.events.ai import (
     CLAUDE_MODELS,
     CLOUDFLARE_MODELS,
@@ -292,6 +292,24 @@ def create_app(cfg: AppConfig) -> Starlette:
         performance_cache.update(at=time.monotonic(), body=body)
         return JSONResponse(body)
 
+    async def news_performance_route(request):
+        """Gross P&L of news trades by article source and by AI model. Cached for a minute."""
+        if refused := denied(request):
+            return refused
+        if (cached := performance_cache.get("news_at")) and time.monotonic() - cached < 60:
+            return JSONResponse(performance_cache["news"])
+        credentials = load_credentials(required=False)
+        if not credentials:
+            return JSONResponse({"error": "Connect Alpaca Paper to load news P&L."}, 503)
+        executor = PaperExecutor(AlpacaClient(credentials, timeout=8, max_retries=1), store)
+        try:
+            async with trade_slots:
+                body = await asyncio.to_thread(news_performance, executor, journal(), store)
+        except Exception:
+            return JSONResponse({"error": "Alpaca Paper fills could not be loaded. Try again shortly."}, 502)
+        performance_cache.update(news_at=time.monotonic(), news=body)
+        return JSONResponse(body)
+
     async def order_detail(request):
         if refused := denied(request):
             return refused
@@ -536,7 +554,7 @@ def create_app(cfg: AppConfig) -> Starlette:
     routes = [Route("/api/config", config), Route("/api/live", live), Route("/api/orders", orders),
               Route("/api/orders/detail", order_detail),
               Route("/api/strategies/performance", strategies_performance),
-              Route("/api/news", news), Route("/api/news/review", news_review), Route("/api/news/assess", assess, methods=["POST"]),
+              Route("/api/news", news), Route("/api/news/performance", news_performance_route), Route("/api/news/review", news_review), Route("/api/news/assess", assess, methods=["POST"]),
               Route("/api/watchlist", save_watchlist, methods=["PUT"]),
               Route("/api/desk-benchmarks", save_benchmarks, methods=["PUT"]),
               Route("/api/control/{action}", control, methods=["POST"]),

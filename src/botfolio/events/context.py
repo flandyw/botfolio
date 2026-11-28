@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 from botfolio.data.calendar import get_calendar, ny_date
+from botfolio.events.paper import NEWS_STOP, OPENING_WAIT
 
 NY = ZoneInfo("America/New_York")
 
@@ -48,11 +49,15 @@ def since_prev_close(snapshots, ticker):
                 nasdaq100_since_prev_close=nasdaq)
 
 
-TRADE = ("BUY or SELL opens a position at the next regular-session price with a 1% stop and a 2% target and closes it "
-         "after 60 minutes. News from outside regular hours enters at the 09:30 ET open.")
+def trade_terms(hold=15):
+    """The trade a BUY or SELL actually opens, from the executor's own settings."""
+    wait = int(OPENING_WAIT.total_seconds() // 60)
+    return (f"BUY or SELL opens a position at the next regular-session price with a {NEWS_STOP:.0%} stop and no profit "
+            f"target, and closes it after {hold} minutes. News from outside regular hours enters at the 09:30 ET open; "
+            f"news from the first {wait} minutes of the session enters {wait} minutes after the open.")
 
 
-def news_context(event, events, company=None):
+def news_context(event, events, company=None, hold=15):
     """What a trader knows besides the article: who the company is, where the session stands, the trade being
     decided, and the stock's earlier headlines from the past day (to judge novelty). All known at receipt."""
     at, cal = event.received_at, get_calendar("NASDAQ")
@@ -66,5 +71,5 @@ def news_context(event, events, company=None):
                                      f"{(nxt.open - at).total_seconds() / 3600:.1f} h away" if nxt else "")
     recent = sorted((e for e in events if e.ticker == event.ticker and e.text != event.text
                      and at - timedelta(hours=24) <= e.received_at < at), key=lambda e: e.received_at)[-5:]
-    return dict(company=company, session=session, trade=TRADE, recent_headlines=[
+    return dict(company=company, session=session, trade=trade_terms(hold), recent_headlines=[
         dict(at=f"{e.received_at.astimezone(NY):%a %H:%M} ET", headline=e.text[:160]) for e in recent])
