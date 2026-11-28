@@ -113,9 +113,13 @@ def test_sec_current_leaves_companies_followed_by_sec_filings():
             '<link rel="alternate" href="https://www.sec.gov/Archives/edgar/data/320193/000032019325000001/'
             '0000320193-25-000001-index.htm"/><updated>2025-01-06T09:40:00-05:00</updated></entry></feed>')
 
-    def get(url):
-        return Mock(json=lambda: {"0": dict(cik_str=320193, ticker="AAPL")}, content=feed.encode(), text="filing")
+    def source(text):
+        return Mock(get=lambda url: Mock(json=lambda: {"0": dict(cik_str=320193, ticker="AAPL")}, content=feed.encode(), text=text))
 
     window = AT - timedelta(days=1), AT + timedelta(days=1)
-    assert SECCurrent(["AAPL"], "Botfolio test@example.com", Mock(get=get), exclude={"AAPL": "320193"}).fetch(*window) == []
-    assert len(SECCurrent(["AAPL"], "Botfolio test@example.com", Mock(get=get)).fetch(*window)) == 1
+    followed = {"AAPL": "320193"}
+    assert SECCurrent(["AAPL"], "Botfolio test@example.com", source("filing"), exclude=followed).fetch(*window) == []
+    assert len(SECCurrent(["AAPL"], "Botfolio test@example.com", source("filing")).fetch(*window)) == 1
+    # SECFilings skips a submission this large, so it is reported here even for a followed company.
+    big = SECCurrent(["AAPL"], "Botfolio test@example.com", source("<p>x</p>" * 30_000), exclude=followed).fetch(*window)
+    assert [e.ticker for e in big] == ["AAPL"]
