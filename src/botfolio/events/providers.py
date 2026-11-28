@@ -219,10 +219,11 @@ class SECCurrent:
     FEED = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&output=atom&count=100"
     TICKERS = "https://www.sec.gov/files/company_tickers.json"
 
-    def __init__(self, symbols, user_agent: str, http=None):
+    def __init__(self, symbols, user_agent: str, http=None, exclude=()):
         if "@" not in user_agent:
             raise ValueError("SEC_USER_AGENT must identify your organization and contact email")
-        self.symbols = symbols
+        # exclude: tickers SECFilings already follows; the same filing must not be archived and assessed twice.
+        self.symbols, self.exclude = symbols, set(exclude)
         self.http = http or HTTP({"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"}, interval=0.25)
         self.ciks, self.loaded, self.seen = {}, None, set()
 
@@ -243,7 +244,7 @@ class SECCurrent:
             found = re.search(r"/data/(\d+)/\d+/(\d{10}-\d{2}-\d{6})-index", link)
             if not found or entry.findtext(atom + "title", "").split(" - ")[0] != "8-K":
                 continue
-            tickers, accession = sorted(self.ciks.get(int(found[1]), set()) & set(self.symbols)), found[2]
+            tickers, accession = sorted(self.ciks.get(int(found[1]), set()) & set(self.symbols) - self.exclude), found[2]
             try:
                 published = datetime.fromisoformat(entry.findtext(atom + "updated", ""))
             except ValueError:
@@ -254,7 +255,7 @@ class SECCurrent:
             url = link.replace("-index.htm", ".txt")
             try:
                 content = plain(self.http.get(url).text)
-            except requests.RequestException:
+            except (requests.RequestException, RuntimeError):  # RuntimeError: HTTP.get ran out of retries
                 continue  # not marked seen: retried on the next poll, and the filings already read are kept
             if len(content) > 200_000:
                 # Exhibit-heavy filings: the feed's item list ("Item 2.02: Results of Operations") still says what happened.

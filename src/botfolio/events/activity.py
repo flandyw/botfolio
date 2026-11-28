@@ -1,5 +1,6 @@
 """Read-only broker and market data for a selected journal entry."""
 
+import json
 import math
 from datetime import UTC, datetime, timedelta
 
@@ -113,6 +114,18 @@ def strategy_performance(executor, rows):
     return result
 
 
+class _Snapshot:
+    """Answers repeated broker requests from the first response."""
+    def __init__(self, executor):
+        self.executor, self.seen = executor, {}
+
+    def request(self, method, path, **kwargs):
+        key = json.dumps([method, path, kwargs], sort_keys=True)
+        if key not in self.seen:
+            self.seen[key] = self.executor.request(method, path, **kwargs)
+        return self.seen[key]
+
+
 def news_performance(executor, rows, store):
     """P&L of news trades by the article's source and by the AI model that made the call, so a source or model
     that loses can be switched off on evidence."""
@@ -127,5 +140,6 @@ def news_performance(executor, rows, store):
                                   f"WHERE event_key IN ({marks}) AND model != 'none:none' ORDER BY "
                                   "json_extract(payload, '$.recommended_action') IN ('BUY', 'SELL'), completed_at DESC",
                                   keys))
-    return {name: strategy_performance(executor, [{**r, "strategy": by.get(r["key"], "unknown")} for r in rows])
+    snapshot = _Snapshot(executor)  # both tables read the same orders and positions
+    return {name: strategy_performance(snapshot, [{**r, "strategy": by.get(r["key"], "unknown")} for r in rows])
             for name, by in (("sources", source), ("models", model))}

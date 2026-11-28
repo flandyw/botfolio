@@ -91,7 +91,7 @@ async def watch(cfg, store, experiment, once=False):
     # Whole-watchlist feeds. Like issuer feeds, an outage here is logged and must not block trading.
     wide = [PRNewswire(cfg.symbols)]
     if os.getenv("SEC_USER_AGENT"):
-        wide.append(SECCurrent(cfg.symbols, os.environ["SEC_USER_AGENT"]))
+        wide.append(SECCurrent(cfg.symbols, os.environ["SEC_USER_AGENT"], exclude=companies))
     router = Router(experiment)
     paper = PaperExecutor(AlpacaClient(creds, timeout=5, max_retries=1), store,
                           int(os.getenv("EVENT_HOLD_MINUTES", "15")), cfg.limits(), cfg.data.feed)

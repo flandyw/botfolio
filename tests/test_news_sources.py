@@ -49,7 +49,7 @@ def test_sec_current_maps_ciks_to_watchlist_and_fetches_each_filing_once():
     def get(url):
         calls.append(url)
         if "1045810" in url and down:
-            raise requests.ConnectionError("reset")
+            raise RuntimeError("provider retries exhausted") if len(calls) < 5 else requests.ConnectionError("reset")
         if url == SECCurrent.TICKERS:
             return Mock(json=lambda: tickers)
         if url == SECCurrent.FEED:
@@ -59,6 +59,7 @@ def test_sec_current_maps_ciks_to_watchlist_and_fetches_each_filing_once():
     provider = SECCurrent(["AAPL", "MSFT", "NV.B"], "Botfolio test@example.com", Mock(get=get))
     rows = provider.fetch(AT - timedelta(days=1), AT + timedelta(days=1))
     assert [r.ticker for r in rows] == ["AAPL"]  # a failed download keeps the filings already read
+    assert provider.fetch(AT - timedelta(days=1), AT + timedelta(days=1)) == []  # a connection error does too
     down.clear()
     rows += provider.fetch(AT - timedelta(days=1), AT + timedelta(days=1))
     assert [(r.ticker, r.source, r.source_id, r.text) for r in rows] == [
@@ -66,7 +67,7 @@ def test_sec_current_maps_ciks_to_watchlist_and_fetches_each_filing_once():
         ("NV.B", "sec", "0001045810-25-000001", "8-K - Company (0001045810) (Filer) Item 2.02: Results of Operations")]
     assert rows[0].source_url.endswith("/000032019325000001/0000320193-25-000001.txt")
     assert provider.fetch(AT - timedelta(days=1), AT + timedelta(days=1)) == []
-    assert calls.count(SECCurrent.TICKERS) == 1 and len(calls) == 7  # tickers, 3 feeds, 3 filings
+    assert calls.count(SECCurrent.TICKERS) == 1 and len(calls) == 9  # tickers, 4 feeds, 4 filing requests
 
 
 def test_prompt_states_the_executed_trade(monkeypatch):
@@ -99,7 +100,22 @@ def test_news_performance_groups_fills_by_source_and_model():
     rows.append(dict(key="m", client_id="evt-m", strategy="momentum", symbol="Q", side="long", opened=AT.isoformat()))
     broker = Broker([order("evt-X", 100, 10, [order("target", 103, 10)]), order("evt-Y", 50, 4, [order("stop", 49, 4)]),
                      order("evt-m", 10, 1)], [])
+    broker.request = Mock(side_effect=broker.request)
     result = news_performance(broker, rows, store)
+    assert broker.request.call_count == 2  # one orders page and one positions read for both tables
     assert {k: v["realized"] for k, v in result["sources"].items()} == {"sec": 30, "alpaca:benzinga": -4}
     assert {k: v["realized"] for k, v in result["models"].items()} == {"claude:opus": 30, "chat:gpt": -4}
     assert json.dumps(result)
+
+
+def test_sec_current_leaves_companies_followed_by_sec_filings():
+    feed = ('<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>8-K - Apple (0000320193) (Filer)</title>'
+            '<link rel="alternate" href="https://www.sec.gov/Archives/edgar/data/320193/000032019325000001/'
+            '0000320193-25-000001-index.htm"/><updated>2025-01-06T09:40:00-05:00</updated></entry></feed>')
+
+    def get(url):
+        return Mock(json=lambda: {"0": dict(cik_str=320193, ticker="AAPL")}, content=feed.encode(), text="filing")
+
+    window = AT - timedelta(days=1), AT + timedelta(days=1)
+    assert SECCurrent(["AAPL"], "Botfolio test@example.com", Mock(get=get), exclude={"AAPL": "320193"}).fetch(*window) == []
+    assert len(SECCurrent(["AAPL"], "Botfolio test@example.com", Mock(get=get)).fetch(*window)) == 1
